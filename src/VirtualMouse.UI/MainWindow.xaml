@@ -92,6 +92,15 @@
                             Background="#555" Foreground="White" Padding="8,6"
                             IsEnabled="False" Click="StopButton_Click"/>
 
+                    <Separator Background="#444" Margin="0,8"/>
+
+                    <Button x:Name="MouseToggleButton"
+                            Content="🖱  Mouse Control: OFF (Test Mode)"
+                            Background="#3C3C3C" Foreground="#FFB800"
+                            FontWeight="Bold" Padding="8,6" Margin="0,0,0,4"
+                            Click="MouseToggle_Click"
+                            ToolTip="Toggle whether finger movement controls the real mouse. When OFF, a virtual cursor is shown on the preview instead."/>
+
                     <Separator Background="#444" Margin="0,12"/>
 
                     <!-- Marker Identification -->

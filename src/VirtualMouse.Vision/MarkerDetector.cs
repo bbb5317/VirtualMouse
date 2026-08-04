@@ -231,7 +231,8 @@ public class MarkerDetector : IDisposable
 
     // ── Debug Visualisation ────────────────────────────────────────────────
 
-    public Mat DrawDebug(Mat frame, IReadOnlyList<MarkerBlob> blobs)
+    public Mat DrawDebug(Mat frame, IReadOnlyList<MarkerBlob> blobs,
+        double virtualCursorX = -1, double virtualCursorY = -1)
     {
         var debug = frame.Clone();
         if (debug.Channels() == 1)
@@ -283,6 +284,26 @@ public class MarkerDetector : IDisposable
                 Cv2.Circle(debug, c, 8, Scalar.Green, 2);
                 Cv2.Circle(debug, c, 2, Scalar.Red, -1);
             }
+        }
+
+        // Draw virtual cursor crosshair in test mode (when virtualCursorX >= 0)
+        if (virtualCursorX >= 0 && virtualCursorY >= 0)
+        {
+            int cx = (int)virtualCursorX;
+            int cy = (int)virtualCursorY;
+            int r  = 14;
+            // White outer ring
+            Cv2.Circle(debug, new Point(cx, cy), r, new Scalar(255, 255, 255), 2);
+            // Cyan inner dot
+            Cv2.Circle(debug, new Point(cx, cy), 4, new Scalar(255, 220, 0), -1);
+            // Crosshair lines
+            Cv2.Line(debug, new Point(cx - r - 6, cy), new Point(cx - r + 2, cy), new Scalar(255, 255, 255), 1);
+            Cv2.Line(debug, new Point(cx + r - 2, cy), new Point(cx + r + 6, cy), new Scalar(255, 255, 255), 1);
+            Cv2.Line(debug, new Point(cx, cy - r - 6), new Point(cx, cy - r + 2), new Scalar(255, 255, 255), 1);
+            Cv2.Line(debug, new Point(cx, cy + r - 2), new Point(cx, cy + r + 6), new Scalar(255, 255, 255), 1);
+            // TEST MODE label
+            Cv2.PutText(debug, "TEST MODE", new Point(10, debug.Height - 12),
+                HersheyFonts.HersheySimplex, 0.55, new Scalar(0, 184, 255), 2);
         }
 
         return debug;

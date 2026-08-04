@@ -27,6 +27,14 @@ public partial class MainWindow : System.Windows.Window
     private int _frameCount;
     private bool _loadingSettings;
 
+    // When false, finger movement does NOT control the real mouse.
+    // Instead a virtual cursor is drawn on the preview for testing.
+    private bool _mouseEnabled = false;
+
+    // Virtual cursor position in camera-frame pixels (updated from gesture recognizer)
+    private double _virtualCursorX = -1;
+    private double _virtualCursorY = -1;
+
     public MainWindow(
         CameraCapture camera,
         MarkerDetector detector,
@@ -81,6 +89,26 @@ public partial class MainWindow : System.Windows.Window
         {
             _settings.CameraDeviceIndex = d.Index;
             _settingsService.Save(_settings);
+        }
+    }
+
+    // ── Mouse Toggle ────────────────────────────────────────────────
+
+    private void MouseToggle_Click(object sender, RoutedEventArgs e)
+    {
+        _mouseEnabled = !_mouseEnabled;
+        if (_mouseEnabled)
+        {
+            MouseToggleButton.Content    = "🖱  Mouse Control: ON";
+            MouseToggleButton.Foreground = (Brush)FindResource("GreenBrush");
+            MouseToggleButton.Background = new SolidColorBrush(Color.FromRgb(26, 70, 26));
+        }
+        else
+        {
+            MouseToggleButton.Content    = "🖱  Mouse Control: OFF (Test Mode)";
+            MouseToggleButton.Foreground = new SolidColorBrush(Color.FromRgb(255, 184, 0));
+            MouseToggleButton.Background = new SolidColorBrush(Color.FromRgb(60, 60, 60));
+            _mouseController.ReleaseAll(); // release any held buttons immediately
         }
     }
 
@@ -152,7 +180,27 @@ public partial class MainWindow : System.Windows.Window
             if (!_detector.IsIdentifying)
             {
                 var gesture = _gestureRecognizer.Process(groups);
-                _mouseController.Apply(gesture);
+                if (_mouseEnabled)
+                {
+                    _mouseController.Apply(gesture);
+                }
+                else
+                {
+                    // Test mode: update virtual cursor position from gesture data
+                    // but do not inject any real mouse events.
+                    _mouseController.ReleaseAll();
+                    if (gesture.MouseDelta.DeltaX != 0 || gesture.MouseDelta.DeltaY != 0)
+                    {
+                        _virtualCursorX = Math.Clamp(_virtualCursorX + gesture.MouseDelta.DeltaX, 0, frame.Width  - 1);
+                        _virtualCursorY = Math.Clamp(_virtualCursorY + gesture.MouseDelta.DeltaY, 0, frame.Height - 1);
+                    }
+                    // Initialise virtual cursor to centre if not yet set
+                    if (_virtualCursorX < 0)
+                    {
+                        _virtualCursorX = frame.Width  / 2.0;
+                        _virtualCursorY = frame.Height / 2.0;
+                    }
+                }
             }
 
             _frameCount++;
@@ -168,7 +216,11 @@ public partial class MainWindow : System.Windows.Window
             // During identification this shows the raw frame with all bright
             // blobs highlighted so the user can see what the camera sees.
             // After identification it shows only confirmed marker windows.
-            using var debugFrame = _detector.DrawDebug(frame, blobs);
+            // In test mode a virtual cursor crosshair is drawn on the frame.
+            double vcx = _virtualCursorX;
+            double vcy = _virtualCursorY;
+            bool testMode = !_mouseEnabled;
+            using var debugFrame = _detector.DrawDebug(frame, blobs, testMode ? vcx : -1, testMode ? vcy : -1);
             var bitmap = MatToBitmapSource(debugFrame);
             bitmap.Freeze();
 
