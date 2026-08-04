@@ -1,0 +1,13 @@
+{
+  "CameraDeviceIndex": 0,
+  "FrameWidth": 1280,
+  "FrameHeight": 800,
+  "TargetFps": 120,
+  "BrightnessThreshold": 200,
+  "MinBlobArea": 5.0,
+  "MaxBlobArea": 500.0,
+  "GroupingDistancePixels": 60.0,
+  "MouseSensitivity": 2.5,
+  "DeadZonePixels": 0.5,
+  "PinchThresholdPixels": 30.0
+}

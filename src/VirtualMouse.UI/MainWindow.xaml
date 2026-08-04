@@ -1,0 +1,130 @@
+<Window x:Class="VirtualMouse.UI.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Virtual Mouse v0.1 — ArduCam OV9281"
+        Height="700" Width="1100"
+        Background="{StaticResource BackgroundBrush}"
+        Foreground="{StaticResource TextBrush}"
+        WindowStartupLocation="CenterScreen">
+
+    <Grid Margin="10">
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="*"/>
+            <ColumnDefinition Width="280"/>
+        </Grid.ColumnDefinitions>
+
+        <!-- Left: Camera Preview -->
+        <Border Grid.Column="0" Background="{StaticResource PanelBrush}" CornerRadius="4" Margin="0,0,10,0">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+
+                <TextBlock Grid.Row="0" Text="Camera Preview" FontSize="14" FontWeight="Bold"
+                           Foreground="{StaticResource AccentBrush}" Margin="10,8,10,4"/>
+
+                <Image x:Name="CameraPreviewImage" Grid.Row="1" Stretch="Uniform"
+                       Margin="5" RenderOptions.BitmapScalingMode="NearestNeighbor"/>
+
+                <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="10,4,10,8">
+                    <TextBlock Text="FPS: " Foreground="{StaticResource TextBrush}"/>
+                    <TextBlock x:Name="FpsLabel" Text="--" Foreground="{StaticResource GreenBrush}" Width="40"/>
+                    <TextBlock Text="Blobs: " Foreground="{StaticResource TextBrush}" Margin="20,0,0,0"/>
+                    <TextBlock x:Name="BlobCountLabel" Text="--" Foreground="{StaticResource GreenBrush}" Width="30"/>
+                    <TextBlock Text="Status: " Foreground="{StaticResource TextBrush}" Margin="20,0,0,0"/>
+                    <TextBlock x:Name="StatusLabel" Text="Stopped" Foreground="{StaticResource RedBrush}"/>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <!-- Right: Controls & Calibration -->
+        <StackPanel Grid.Column="1" Background="{StaticResource PanelBrush}">
+            <Border Background="{StaticResource PanelBrush}" CornerRadius="4" Padding="10">
+                <StackPanel>
+                    <TextBlock Text="Controls" FontSize="14" FontWeight="Bold"
+                               Foreground="{StaticResource AccentBrush}" Margin="0,0,0,10"/>
+
+                    <TextBlock Text="Camera Device Index:" Margin="0,4,0,2"/>
+                    <TextBox x:Name="CameraIndexBox" Text="0" Background="#3C3C3C" Foreground="{StaticResource TextBrush}"
+                             BorderBrush="{StaticResource AccentBrush}" Padding="4"/>
+
+                    <Button x:Name="StartButton" Content="▶  Start Tracking" Margin="0,10,0,4"
+                            Background="{StaticResource AccentBrush}" Foreground="White"
+                            FontWeight="Bold" Padding="8,6" Click="StartButton_Click"/>
+                    <Button x:Name="StopButton" Content="■  Stop Tracking" Margin="0,0,0,10"
+                            Background="#555" Foreground="White" Padding="8,6"
+                            IsEnabled="False" Click="StopButton_Click"/>
+
+                    <Separator Background="#444" Margin="0,8"/>
+
+                    <TextBlock Text="Calibration" FontSize="13" FontWeight="Bold"
+                               Foreground="{StaticResource AccentBrush}" Margin="0,4,0,8"/>
+
+                    <!-- Brightness Threshold -->
+                    <TextBlock Text="Brightness Threshold:"/>
+                    <StackPanel Orientation="Horizontal">
+                        <Slider x:Name="ThresholdSlider" Minimum="100" Maximum="254" Value="200"
+                                Width="180" VerticalAlignment="Center"
+                                ValueChanged="ThresholdSlider_ValueChanged"/>
+                        <TextBlock x:Name="ThresholdLabel" Text="200" Width="35" Margin="6,0,0,0" VerticalAlignment="Center"/>
+                    </StackPanel>
+
+                    <!-- Mouse Sensitivity -->
+                    <TextBlock Text="Mouse Sensitivity:" Margin="0,8,0,0"/>
+                    <StackPanel Orientation="Horizontal">
+                        <Slider x:Name="SensitivitySlider" Minimum="0.5" Maximum="10.0" Value="2.5"
+                                Width="180" VerticalAlignment="Center"
+                                ValueChanged="SensitivitySlider_ValueChanged"/>
+                        <TextBlock x:Name="SensitivityLabel" Text="2.5" Width="35" Margin="6,0,0,0" VerticalAlignment="Center"/>
+                    </StackPanel>
+
+                    <!-- Pinch Threshold -->
+                    <TextBlock Text="Pinch Click Threshold (px):" Margin="0,8,0,0"/>
+                    <StackPanel Orientation="Horizontal">
+                        <Slider x:Name="PinchSlider" Minimum="10" Maximum="100" Value="30"
+                                Width="180" VerticalAlignment="Center"
+                                ValueChanged="PinchSlider_ValueChanged"/>
+                        <TextBlock x:Name="PinchLabel" Text="30" Width="35" Margin="6,0,0,0" VerticalAlignment="Center"/>
+                    </StackPanel>
+
+                    <Separator Background="#444" Margin="0,12"/>
+
+                    <!-- Finger Identity Status -->
+                    <TextBlock Text="Marker Detection Status" FontSize="13" FontWeight="Bold"
+                               Foreground="{StaticResource AccentBrush}" Margin="0,0,0,8"/>
+
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="60"/>
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition/>
+                            <RowDefinition/>
+                            <RowDefinition/>
+                            <RowDefinition/>
+                        </Grid.RowDefinitions>
+
+                        <TextBlock Grid.Row="0" Grid.Column="0" Text="Left Thumb (×1):" Margin="0,3"/>
+                        <TextBlock x:Name="LeftThumbStatus" Grid.Row="0" Grid.Column="1" Text="Lost" Foreground="{StaticResource RedBrush}"/>
+
+                        <TextBlock Grid.Row="1" Grid.Column="0" Text="Left Index (×3):" Margin="0,3"/>
+                        <TextBlock x:Name="LeftIndexStatus" Grid.Row="1" Grid.Column="1" Text="Lost" Foreground="{StaticResource RedBrush}"/>
+
+                        <TextBlock Grid.Row="2" Grid.Column="0" Text="Right Index (×3):" Margin="0,3"/>
+                        <TextBlock x:Name="RightIndexStatus" Grid.Row="2" Grid.Column="1" Text="Lost" Foreground="{StaticResource RedBrush}"/>
+
+                        <TextBlock Grid.Row="3" Grid.Column="0" Text="Right Middle (×3):" Margin="0,3"/>
+                        <TextBlock x:Name="RightMiddleStatus" Grid.Row="3" Grid.Column="1" Text="Lost" Foreground="{StaticResource RedBrush}"/>
+                    </Grid>
+
+                    <Separator Background="#444" Margin="0,12"/>
+                    <TextBlock Text="v0.1.0 — Proof of Concept" FontSize="10"
+                               Foreground="#666" HorizontalAlignment="Center"/>
+                </StackPanel>
+            </Border>
+        </StackPanel>
+    </Grid>
+</Window>
