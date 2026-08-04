@@ -54,13 +54,12 @@ public partial class MainWindow : System.Windows.Window
         ApplySettingsToUI();
     }
 
-    // ── Camera Enumeration ─────────────────────────────────────────────────
+    // ── Camera ─────────────────────────────────────────────────────────────
 
     private void RefreshCameraList()
     {
         CameraComboBox.Items.Clear();
         var devices = _cameraEnumerator.Enumerate();
-
         if (devices.Count == 0)
         {
             CameraComboBox.Items.Add(new CameraDeviceInfo(-1, "No cameras found"));
@@ -68,9 +67,7 @@ public partial class MainWindow : System.Windows.Window
             StartButton.IsEnabled = false;
             return;
         }
-
         foreach (var d in devices) CameraComboBox.Items.Add(d);
-
         var match = devices.FirstOrDefault(d => d.Index == _settings.CameraDeviceIndex);
         CameraComboBox.SelectedItem = match ?? devices[0];
         StartButton.IsEnabled = true;
@@ -97,13 +94,10 @@ public partial class MainWindow : System.Windows.Window
                 MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
-
         _settings.CameraDeviceIndex = device.Index;
-
         if (!_camera.Open())
         {
-            MessageBox.Show(
-                $"Failed to open \"{device.Name}\".\n\nCheck it is connected and not in use.",
+            MessageBox.Show($"Failed to open \"{device.Name}\".\nCheck it is connected and not in use.",
                 "Camera Error", MessageBoxButton.OK, MessageBoxImage.Error);
             return;
         }
@@ -117,6 +111,7 @@ public partial class MainWindow : System.Windows.Window
         CameraComboBox.IsEnabled = false;
         StatusLabel.Text = "Running";
         StatusLabel.Foreground = (Brush)FindResource("GreenBrush");
+        WarmUpPill.Visibility = Visibility.Visible;
     }
 
     private void StopButton_Click(object sender, RoutedEventArgs e) => StopTracking();
@@ -137,6 +132,7 @@ public partial class MainWindow : System.Windows.Window
             StatusLabel.Text = "Stopped";
             StatusLabel.Foreground = (Brush)FindResource("RedBrush");
             UpdateActivationPill(false);
+            WarmUpPill.Visibility = Visibility.Collapsed;
         });
     }
 
@@ -148,8 +144,13 @@ public partial class MainWindow : System.Windows.Window
         {
             var blobs   = _detector.Detect(frame);
             var groups  = _grouper.Group(blobs);
-            var gesture = _gestureRecognizer.Process(groups);
-            _mouseController.Apply(gesture);
+
+            // Suppress mouse injection during background model warm-up
+            if (_detector.IsWarmedUp)
+            {
+                var gesture = _gestureRecognizer.Process(groups);
+                _mouseController.Apply(gesture);
+            }
 
             _frameCount++;
             if (_fpsStopwatch.ElapsedMilliseconds >= 100)
@@ -162,9 +163,10 @@ public partial class MainWindow : System.Windows.Window
                 var bitmap = MatToBitmapSource(debugFrame);
                 bitmap.Freeze();
 
-                var groupDict = groups.ToDictionary(g => g.Identity);
+                var groupDict  = groups.ToDictionary(g => g.Identity);
                 double pinchDist = _gestureRecognizer.LastActivationDistance;
                 bool mouseActive = _gestureRecognizer.IsMouseActive;
+                bool warmedUp    = _detector.IsWarmedUp;
 
                 Dispatcher.InvokeAsync(() =>
                 {
@@ -174,10 +176,19 @@ public partial class MainWindow : System.Windows.Window
                     PinchDistLabel.Text = pinchDist > 0 ? $"{pinchDist:F0}px" : "--";
                     CalibDistLabel.Text = pinchDist > 0 ? $"{pinchDist:F0} px" : "-- px";
                     UpdateActivationPill(mouseActive);
+                    WarmUpPill.Visibility = warmedUp ? Visibility.Collapsed : Visibility.Visible;
                     UpdateFingerStatus(groupDict);
                 });
             }
         }
+    }
+
+    // ── Background Model ───────────────────────────────────────────────────
+
+    private void ResetBackground_Click(object sender, RoutedEventArgs e)
+    {
+        _detector.ResetBackground();
+        WarmUpPill.Visibility = Visibility.Visible;
     }
 
     // ── Calibration ────────────────────────────────────────────────────────
@@ -192,11 +203,9 @@ public partial class MainWindow : System.Windows.Window
                 "Calibration Failed", MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
-
         _gestureRecognizer.CalibrateActivation();
         _settings.ActivationThresholdPixels = dist;
         _settingsService.Save(_settings);
-
         CalibThreshLabel.Text = $"{dist:F0} px";
         MessageBox.Show(
             $"Activation threshold set to {dist:F0} px.\n\nSpread your fingers beyond this distance to activate the mouse.",
@@ -210,13 +219,15 @@ public partial class MainWindow : System.Windows.Window
         _loadingSettings = true;
         try
         {
-            ThresholdSlider.Value   = _settings.BrightnessThreshold;
-            SensitivitySlider.Value = _settings.MouseSensitivity;
-            HysteresisSlider.Value  = _settings.ActivationHysteresisPixels;
+            ThresholdSlider.Value    = _settings.BrightnessThreshold;
+            SensitivitySlider.Value  = _settings.MouseSensitivity;
+            HysteresisSlider.Value   = _settings.ActivationHysteresisPixels;
+            LearningRateSlider.Value = _settings.BackgroundLearningRate;
 
-            ThresholdLabel.Text   = $"{_settings.BrightnessThreshold}";
-            SensitivityLabel.Text = $"{_settings.MouseSensitivity:F1}";
-            HysteresisLabel.Text  = $"{(int)_settings.ActivationHysteresisPixels}";
+            ThresholdLabel.Text    = $"{_settings.BrightnessThreshold}";
+            SensitivityLabel.Text  = $"{_settings.MouseSensitivity:F1}";
+            HysteresisLabel.Text   = $"{(int)_settings.ActivationHysteresisPixels}";
+            LearningRateLabel.Text = $"{_settings.BackgroundLearningRate:F3}";
 
             CalibThreshLabel.Text = _settings.ActivationThresholdPixels > 0
                 ? $"{_settings.ActivationThresholdPixels:F0} px"
@@ -265,6 +276,14 @@ public partial class MainWindow : System.Windows.Window
         _settingsService.Save(_settings);
     }
 
+    private void LearningRateSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (_settings == null || _loadingSettings) return;
+        _settings.BackgroundLearningRate = e.NewValue;
+        if (LearningRateLabel != null) LearningRateLabel.Text = $"{e.NewValue:F3}";
+        _settingsService.Save(_settings);
+    }
+
     // ── UI Helpers ─────────────────────────────────────────────────────────
 
     private void UpdateActivationPill(bool active)
@@ -280,7 +299,6 @@ public partial class MainWindow : System.Windows.Window
         var green  = (Brush)FindResource("GreenBrush");
         var yellow = new SolidColorBrush(Color.FromRgb(255, 200, 0));
         var red    = (Brush)FindResource("RedBrush");
-
         SetFingerStatus(LeftThumbStatus,   groups, FingerIdentity.LeftThumb,   green, yellow, red);
         SetFingerStatus(LeftIndexStatus,   groups, FingerIdentity.LeftIndex,   green, yellow, red);
         SetFingerStatus(RightIndexStatus,  groups, FingerIdentity.RightIndex,  green, yellow, red);
@@ -308,14 +326,8 @@ public partial class MainWindow : System.Windows.Window
 
     private static BitmapSource MatToBitmapSource(Mat mat)
     {
-        Mat bgr = mat;
-        bool nd = false;
-        if (mat.Channels() == 1)
-        {
-            bgr = new Mat();
-            Cv2.CvtColor(mat, bgr, ColorConversionCodes.GRAY2BGR);
-            nd = true;
-        }
+        Mat bgr = mat; bool nd = false;
+        if (mat.Channels() == 1) { bgr = new Mat(); Cv2.CvtColor(mat, bgr, ColorConversionCodes.GRAY2BGR); nd = true; }
         int w = bgr.Width, h = bgr.Height, s = (int)bgr.Step();
         var px = new byte[s * h];
         Marshal.Copy(bgr.Data, px, 0, px.Length);
