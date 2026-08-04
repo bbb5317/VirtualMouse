@@ -140,36 +140,43 @@ public partial class MainWindow : System.Windows.Window
         _totalFrames = 0;
     }
 
-    private void CloseCamera_Click(object sender, RoutedEventArgs e) => CloseCamera();
-
-    private void CloseCamera()
+    private void CloseCamera_Click(object sender, RoutedEventArgs e)
     {
-        _cts?.Cancel();
-        _cts = null;
+        // Disable the button immediately so user cannot click twice
+        CloseButton.IsEnabled = false;
+        SetPill("STOPPING...", Color.FromRgb(140, 100, 0));
 
-        if (_activeStage == 0)
+        // Run teardown on a background thread — never block the UI thread
+        Task.Run(() =>
         {
-            Thread.Sleep(200);
-            _rawCapture?.Release();
-            _rawCapture?.Dispose();
-            _rawCapture = null;
-        }
-        else
-        {
-            _camCapture?.Stop();
-            _camCapture = null;
-            _mouseController.ReleaseAll();
-            _gestureRecognizer.Reset();
-            _detector.ResetIdentification();
-        }
+            _cts?.Cancel();
+            _cts = null;
 
-        Dispatcher.InvokeAsync(() =>
-        {
-            OpenButton.IsEnabled = true;
-            CloseButton.IsEnabled = false;
-            SetPill("STOPPED", Color.FromRgb(180,40,40));
-            BlobCountLabel.Text = "--";
-            MarkerCountLabel.Text = "--";
+            if (_activeStage == 0)
+            {
+                Thread.Sleep(200);
+                var rc = _rawCapture;
+                _rawCapture = null;
+                try { rc?.Release(); } catch { }
+                try { rc?.Dispose(); } catch { }
+            }
+            else
+            {
+                _camCapture?.Stop();
+                _camCapture = null;
+                _mouseController.ReleaseAll();
+                _gestureRecognizer.Reset();
+                _detector.ResetIdentification();
+            }
+
+            Dispatcher.InvokeAsync(() =>
+            {
+                OpenButton.IsEnabled = true;
+                CloseButton.IsEnabled = false;
+                SetPill("STOPPED", Color.FromRgb(180, 40, 40));
+                BlobCountLabel.Text = "--";
+                MarkerCountLabel.Text = "--";
+            });
         });
     }
 

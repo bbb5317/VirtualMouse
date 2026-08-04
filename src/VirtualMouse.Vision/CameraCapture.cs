@@ -105,11 +105,18 @@ public sealed class CameraCapture : IDisposable
     public void Stop()
     {
         _isRunning = false;
-        try { _captureTask?.Wait(TimeSpan.FromSeconds(3)); }
-        catch { }
-        _capture?.Release();
-        _capture?.Dispose();
+
+        // Release the VideoCapture FIRST so that any blocking Read()/Grab() call
+        // on the background thread returns immediately with an error.
+        // Only then wait for the loop task to exit.
+        var cap = _capture;
         _capture = null;
+        try { cap?.Release(); } catch { }
+        try { cap?.Dispose(); } catch { }
+
+        try { _captureTask?.Wait(TimeSpan.FromSeconds(2)); }
+        catch { }
+
         _logger.LogInformation("Camera stopped.");
     }
 
