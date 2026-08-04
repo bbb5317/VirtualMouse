@@ -1,238 +1,79 @@
 <Window x:Class="VirtualMouse.UI.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Virtual Mouse v0.6 — ArduCam OV9281"
-        Height="840" Width="1200"
-        Background="{StaticResource BackgroundBrush}"
-        Foreground="{StaticResource TextBrush}"
+        Title="Virtual Mouse — Camera Test"
+        Height="700" Width="1100"
+        Background="#1E1E1E"
+        Foreground="White"
         WindowStartupLocation="CenterScreen">
 
     <Grid Margin="10">
         <Grid.ColumnDefinitions>
             <ColumnDefinition Width="*"/>
-            <ColumnDefinition Width="310"/>
+            <ColumnDefinition Width="220"/>
         </Grid.ColumnDefinitions>
 
-        <!-- ── Left: Camera Preview ── -->
-        <Border Grid.Column="0" Background="{StaticResource PanelBrush}" CornerRadius="4" Margin="0,0,10,0">
+        <!-- Camera preview -->
+        <Border Grid.Column="0" Background="#2A2A2A" CornerRadius="4" Margin="0,0,10,0">
             <Grid>
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="*"/>
                     <RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
-
-                <Grid Grid.Row="0" Margin="10,8,10,4">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*"/>
-                        <ColumnDefinition Width="Auto"/>
-                        <ColumnDefinition Width="Auto"/>
-                    </Grid.ColumnDefinitions>
-                    <TextBlock Text="Camera Preview" FontSize="14" FontWeight="Bold"
-                               Foreground="{StaticResource AccentBrush}" VerticalAlignment="Center"/>
-                    <!-- Identification status pill -->
-                    <Border x:Name="IdentifyPill" Grid.Column="1"
-                            Background="#885500" CornerRadius="10" Padding="10,4" Margin="0,0,8,0">
-                        <TextBlock x:Name="IdentifyLabel" Text="Identifying..."
-                                   FontSize="11" Foreground="White"/>
-                    </Border>
-                    <!-- Mouse activation pill -->
-                    <Border x:Name="ActivationPill" Grid.Column="2"
-                            Background="{StaticResource RedBrush}" CornerRadius="10" Padding="12,4">
-                        <TextBlock x:Name="ActivationLabel" Text="MOUSE OFF"
-                                   FontWeight="Bold" FontSize="11" Foreground="White"/>
-                    </Border>
-                </Grid>
-
-                <Image x:Name="CameraPreviewImage" Grid.Row="1" Stretch="Uniform"
-                       Margin="5" RenderOptions.BitmapScalingMode="NearestNeighbor"/>
-
+                <TextBlock Grid.Row="0" Text="Camera Preview (raw — no processing)"
+                           Foreground="#1E90FF" FontSize="13" FontWeight="Bold" Margin="10,8"/>
+                <Image x:Name="PreviewImage" Grid.Row="1" Stretch="Uniform" Margin="5"/>
                 <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="10,4,10,8">
                     <TextBlock Text="FPS: "/>
-                    <TextBlock x:Name="FpsLabel" Text="--" Foreground="{StaticResource GreenBrush}" Width="40"/>
-                    <TextBlock Text="Markers: " Margin="20,0,0,0"/>
-                    <TextBlock x:Name="MarkerCountLabel" Text="--" Foreground="{StaticResource GreenBrush}" Width="30"/>
-                    <TextBlock Text="Blobs: " Margin="10,0,0,0"/>
-                    <TextBlock x:Name="BlobCountLabel" Text="--" Foreground="#888" Width="30"/>
-                    <TextBlock Text="Pinch: " Margin="20,0,0,0"/>
-                    <TextBlock x:Name="PinchDistLabel" Text="--" Foreground="{StaticResource AccentBrush}" Width="55"/>
-                    <TextBlock Text="Status: " Margin="20,0,0,0"/>
-                    <TextBlock x:Name="StatusLabel" Text="Stopped" Foreground="{StaticResource RedBrush}"/>
+                    <TextBlock x:Name="FpsLabel" Text="--" Foreground="#00CC44" Width="40"/>
+                    <TextBlock Text="Frames: " Margin="20,0,0,0"/>
+                    <TextBlock x:Name="FrameCountLabel" Text="0" Foreground="#00CC44"/>
                 </StackPanel>
             </Grid>
         </Border>
 
-        <!-- ── Right: Controls ── -->
-        <Border Grid.Column="1" Background="{StaticResource PanelBrush}" CornerRadius="4" Padding="12">
-            <ScrollViewer VerticalScrollBarVisibility="Auto">
-                <StackPanel>
+        <!-- Controls -->
+        <Border Grid.Column="1" Background="#2A2A2A" CornerRadius="4" Padding="12">
+            <StackPanel>
+                <TextBlock Text="Camera" FontSize="13" FontWeight="Bold"
+                           Foreground="#1E90FF" Margin="0,0,0,10"/>
 
-                    <!-- Controls -->
-                    <TextBlock Text="Controls" FontSize="14" FontWeight="Bold"
-                               Foreground="{StaticResource AccentBrush}" Margin="0,0,0,10"/>
+                <TextBlock Text="Device:" Margin="0,0,0,3"/>
+                <Grid Margin="0,0,0,8">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <ComboBox x:Name="CameraComboBox" Grid.Column="0"
+                              Background="#3C3C3C" Foreground="White"
+                              Padding="6,4"/>
+                    <Button Grid.Column="1" Content="↻" Margin="4,0,0,0"
+                            Padding="8,4" Background="#3C3C3C" Foreground="White"
+                            Click="RefreshCameras_Click"/>
+                </Grid>
 
-                    <TextBlock Text="Camera Device:" Margin="0,0,0,3"/>
-                    <Grid Margin="0,0,0,6">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="Auto"/>
-                        </Grid.ColumnDefinitions>
-                        <ComboBox x:Name="CameraComboBox" Grid.Column="0"
-                                  Background="#3C3C3C" Foreground="{StaticResource TextBrush}"
-                                  BorderBrush="{StaticResource AccentBrush}" Padding="6,4"
-                                  SelectionChanged="CameraComboBox_SelectionChanged"/>
-                        <Button Grid.Column="1" Content="↻" ToolTip="Refresh camera list"
-                                Margin="4,0,0,0" Padding="8,4" FontSize="14"
-                                Background="#3C3C3C" Foreground="{StaticResource TextBrush}"
-                                BorderBrush="{StaticResource AccentBrush}" Click="RefreshCameras_Click"/>
-                    </Grid>
+                <Button x:Name="StartButton" Content="▶  Open Camera"
+                        Background="#1E90FF" Foreground="White" FontWeight="Bold"
+                        Padding="8,6" Margin="0,4,0,4" Click="StartButton_Click"/>
+                <Button x:Name="StopButton" Content="■  Close Camera"
+                        Background="#555" Foreground="White" Padding="8,6"
+                        IsEnabled="False" Click="StopButton_Click"/>
 
-                    <Button x:Name="StartButton" Content="▶  Start Tracking" Margin="0,4,0,4"
-                            Background="{StaticResource AccentBrush}" Foreground="White"
-                            FontWeight="Bold" Padding="8,6" Click="StartButton_Click"/>
-                    <Button x:Name="StopButton" Content="■  Stop Tracking"
-                            Background="#555" Foreground="White" Padding="8,6"
-                            IsEnabled="False" Click="StopButton_Click"/>
+                <Separator Background="#444" Margin="0,16"/>
 
-                    <Separator Background="#444" Margin="0,12"/>
+                <TextBlock Text="Status" FontSize="13" FontWeight="Bold"
+                           Foreground="#1E90FF" Margin="0,0,0,8"/>
+                <TextBlock x:Name="StatusLabel" Text="Stopped"
+                           Foreground="#CC3333" FontSize="12"/>
 
-                    <!-- Marker Identification -->
-                    <TextBlock Text="Marker Identification" FontSize="13" FontWeight="Bold"
-                               Foreground="{StaticResource AccentBrush}" Margin="0,0,0,6"/>
-
-                    <TextBlock TextWrapping="Wrap" Foreground="#AAA" FontSize="11" Margin="0,0,0,8">
-The system automatically identifies which blobs are markers by
-tracking which ones move. Move your hands naturally — markers
-are identified within a few seconds and updated continuously.
-                    </TextBlock>
-
-                    <!-- Live identification status -->
-                    <Border Background="#1A1A1A" CornerRadius="4" Padding="8,6" Margin="0,0,0,8">
-                        <StackPanel>
-                            <TextBlock x:Name="IdentifyStatusLabel"
-                                       Text="Confirmed markers: 0"
-                                       Foreground="#888" FontSize="11"/>
-                            <TextBlock x:Name="IdentifyPassLabel"
-                                       Text="Identification passes: 0"
-                                       Foreground="#666" FontSize="10" Margin="0,2,0,0"/>
-                        </StackPanel>
-                    </Border>
-
-                    <Button Content="⟳  Re-identify Markers"
-                            Background="#3C3C3C" Foreground="{StaticResource TextBrush}"
-                            BorderBrush="{StaticResource AccentBrush}" Padding="8,6" Margin="0,0,0,4"
-                            Click="ReIdentify_Click"
-                            ToolTip="Reset marker identification and start fresh (e.g. after repositioning camera)"/>
-
-                    <!-- Identification interval -->
-                    <TextBlock Text="Identification Interval (frames):"
-                               ToolTip="How often the slow pass runs. Lower = faster re-ID, more CPU."/>
-                    <Grid Margin="0,2,0,8">
-                        <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="42"/></Grid.ColumnDefinitions>
-                        <Slider x:Name="IdentifyIntervalSlider" Grid.Column="0"
-                                Minimum="10" Maximum="120" Value="60"
-                                VerticalAlignment="Center" ValueChanged="IdentifyIntervalSlider_ValueChanged"/>
-                        <TextBlock x:Name="IdentifyIntervalLabel" Grid.Column="1"
-                                   Text="60" Margin="6,0,0,0" VerticalAlignment="Center"/>
-                    </Grid>
-
-                    <!-- Movement threshold -->
-                    <TextBlock Text="Movement Threshold (px):"
-                               ToolTip="Min displacement to classify a blob as a marker. Lower catches slow-moving markers; higher rejects camera vibration noise."/>
-                    <Grid Margin="0,2,0,8">
-                        <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="42"/></Grid.ColumnDefinitions>
-                        <Slider x:Name="MoveThreshSlider" Grid.Column="0"
-                                Minimum="2" Maximum="30" Value="8"
-                                VerticalAlignment="Center" ValueChanged="MoveThreshSlider_ValueChanged"/>
-                        <TextBlock x:Name="MoveThreshLabel" Grid.Column="1"
-                                   Text="8" Margin="6,0,0,0" VerticalAlignment="Center"/>
-                    </Grid>
-
-                    <Separator Background="#444" Margin="0,8"/>
-
-                    <!-- Activation Calibration -->
-                    <TextBlock Text="Activation Calibration" FontSize="13" FontWeight="Bold"
-                               Foreground="{StaticResource AccentBrush}" Margin="0,0,0,6"/>
-                    <TextBlock TextWrapping="Wrap" Foreground="#AAA" FontSize="11" Margin="0,0,0,8">
-Spread left thumb + index to the ON position, then press Calibrate.
-                    </TextBlock>
-                    <Grid Margin="0,0,0,4">
-                        <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-                        <StackPanel Grid.Column="0" Margin="0,0,4,0">
-                            <TextBlock Text="Current:" FontSize="10" Foreground="#888"/>
-                            <TextBlock x:Name="CalibDistLabel" Text="-- px" FontSize="16" FontWeight="Bold"
-                                       Foreground="{StaticResource AccentBrush}"/>
-                        </StackPanel>
-                        <StackPanel Grid.Column="1" Margin="4,0,0,0">
-                            <TextBlock Text="Threshold:" FontSize="10" Foreground="#888"/>
-                            <TextBlock x:Name="CalibThreshLabel" Text="Not set" FontSize="16" FontWeight="Bold"
-                                       Foreground="{StaticResource GreenBrush}"/>
-                        </StackPanel>
-                    </Grid>
-                    <Button Content="🎯  Calibrate Activation Point"
-                            Background="#1A5C2A" Foreground="White" FontWeight="Bold"
-                            Padding="8,6" Margin="0,4,0,0" Click="CalibrateActivation_Click"/>
-
-                    <Separator Background="#444" Margin="0,12"/>
-
-                    <!-- Calibration -->
-                    <TextBlock Text="Calibration" FontSize="13" FontWeight="Bold"
-                               Foreground="{StaticResource AccentBrush}" Margin="0,0,0,8"/>
-
-                    <TextBlock Text="Brightness Threshold:"/>
-                    <Grid Margin="0,2,0,8">
-                        <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="38"/></Grid.ColumnDefinitions>
-                        <Slider x:Name="ThresholdSlider" Grid.Column="0" Minimum="50" Maximum="254" Value="180"
-                                VerticalAlignment="Center" ValueChanged="ThresholdSlider_ValueChanged"/>
-                        <TextBlock x:Name="ThresholdLabel" Grid.Column="1" Text="180" Margin="6,0,0,0" VerticalAlignment="Center"/>
-                    </Grid>
-
-                    <TextBlock Text="Mouse Sensitivity:"/>
-                    <Grid Margin="0,2,0,8">
-                        <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="38"/></Grid.ColumnDefinitions>
-                        <Slider x:Name="SensitivitySlider" Grid.Column="0" Minimum="0.5" Maximum="10.0" Value="2.5"
-                                VerticalAlignment="Center" ValueChanged="SensitivitySlider_ValueChanged"/>
-                        <TextBlock x:Name="SensitivityLabel" Grid.Column="1" Text="2.5" Margin="6,0,0,0" VerticalAlignment="Center"/>
-                    </Grid>
-
-                    <TextBlock Text="Activation Hysteresis (px):"/>
-                    <Grid Margin="0,2,0,8">
-                        <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="38"/></Grid.ColumnDefinitions>
-                        <Slider x:Name="HysteresisSlider" Grid.Column="0" Minimum="5" Maximum="60" Value="15"
-                                VerticalAlignment="Center" ValueChanged="HysteresisSlider_ValueChanged"/>
-                        <TextBlock x:Name="HysteresisLabel" Grid.Column="1" Text="15" Margin="6,0,0,0" VerticalAlignment="Center"/>
-                    </Grid>
-
-                    <Button Content="↺  Reset to Defaults" Margin="0,4,0,0"
-                            Background="#6B2020" Foreground="White" Padding="8,6"
-                            Click="ResetDefaults_Click"/>
-
-                    <Separator Background="#444" Margin="0,12"/>
-
-                    <!-- Marker Detection Status -->
-                    <TextBlock Text="Marker Detection Status" FontSize="13" FontWeight="Bold"
-                               Foreground="{StaticResource AccentBrush}" Margin="0,0,0,8"/>
-                    <Grid>
-                        <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="50"/></Grid.ColumnDefinitions>
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="24"/><RowDefinition Height="24"/>
-                            <RowDefinition Height="24"/><RowDefinition Height="24"/>
-                        </Grid.RowDefinitions>
-                        <TextBlock Grid.Row="0" Grid.Column="0" Text="Left Thumb (×1):"  VerticalAlignment="Center"/>
-                        <TextBlock x:Name="LeftThumbStatus"   Grid.Row="0" Grid.Column="1" Text="Lost" Foreground="{StaticResource RedBrush}" VerticalAlignment="Center"/>
-                        <TextBlock Grid.Row="1" Grid.Column="0" Text="Left Index (×3):"  VerticalAlignment="Center"/>
-                        <TextBlock x:Name="LeftIndexStatus"   Grid.Row="1" Grid.Column="1" Text="Lost" Foreground="{StaticResource RedBrush}" VerticalAlignment="Center"/>
-                        <TextBlock Grid.Row="2" Grid.Column="0" Text="Right Index (×3):" VerticalAlignment="Center"/>
-                        <TextBlock x:Name="RightIndexStatus"  Grid.Row="2" Grid.Column="1" Text="Lost" Foreground="{StaticResource RedBrush}" VerticalAlignment="Center"/>
-                        <TextBlock Grid.Row="3" Grid.Column="0" Text="Right Middle (×3):" VerticalAlignment="Center"/>
-                        <TextBlock x:Name="RightMiddleStatus" Grid.Row="3" Grid.Column="1" Text="Lost" Foreground="{StaticResource RedBrush}" VerticalAlignment="Center"/>
-                    </Grid>
-
-                    <Separator Background="#444" Margin="0,12"/>
-                    <TextBlock x:Name="SettingsPathLabel" FontSize="9" Foreground="#555" TextWrapping="Wrap" Margin="0,0,0,4"/>
-                    <TextBlock Text="v0.6.0 — Proof of Concept" FontSize="10" Foreground="#666" HorizontalAlignment="Center"/>
-                </StackPanel>
-            </ScrollViewer>
+                <Separator Background="#444" Margin="0,16"/>
+                <TextBlock TextWrapping="Wrap" Foreground="#888" FontSize="10">
+DIAGNOSTIC MODE
+No detection, no processing.
+Raw camera frames only.
+                </TextBlock>
+            </StackPanel>
         </Border>
     </Grid>
 </Window>
