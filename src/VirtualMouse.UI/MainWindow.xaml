@@ -7,23 +7,105 @@
         WindowStartupLocation="CenterScreen">
 
     <Window.Resources>
-        <!-- ComboBox style: white text on dark background, readable dropdown -->
+
+        <!-- ── Dark ComboBox ─────────────────────────────────────────────── -->
+        <SolidColorBrush x:Key="ComboBoxBg"     Color="#3C3C3C"/>
+        <SolidColorBrush x:Key="ComboBoxFg"     Color="#E0E0E0"/>
+        <SolidColorBrush x:Key="ComboBoxBorder" Color="#666666"/>
+
+        <ControlTemplate x:Key="DarkComboBoxToggle" TargetType="ToggleButton">
+            <Border Background="{StaticResource ComboBoxBg}"
+                    BorderBrush="{StaticResource ComboBoxBorder}"
+                    BorderThickness="1" CornerRadius="2">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition/>
+                        <ColumnDefinition Width="20"/>
+                    </Grid.ColumnDefinitions>
+                    <ContentPresenter Grid.Column="0" Margin="6,0,0,0"
+                                      VerticalAlignment="Center"/>
+                    <Path Grid.Column="1" Data="M 0 0 L 4 4 L 8 0 Z"
+                          Fill="#AAAAAA" HorizontalAlignment="Center"
+                          VerticalAlignment="Center"/>
+                </Grid>
+            </Border>
+        </ControlTemplate>
+
+        <ControlTemplate x:Key="DarkComboBox" TargetType="ComboBox">
+            <Grid>
+                <ToggleButton Template="{StaticResource DarkComboBoxToggle}"
+                              IsChecked="{Binding IsDropDownOpen, Mode=TwoWay,
+                                          RelativeSource={RelativeSource TemplatedParent}}"
+                              Focusable="False"/>
+                <ContentPresenter Margin="8,0,24,0" VerticalAlignment="Center"
+                                  Content="{TemplateBinding SelectionBoxItem}"
+                                  ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}"
+                                  IsHitTestVisible="False"
+                                  TextBlock.Foreground="{StaticResource ComboBoxFg}"/>
+                <Popup IsOpen="{TemplateBinding IsDropDownOpen}" AllowsTransparency="True"
+                       Focusable="False" PopupAnimation="Slide" Placement="Bottom">
+                    <Border Background="#2E2E2E" BorderBrush="#666" BorderThickness="1"
+                            MaxHeight="{TemplateBinding MaxDropDownHeight}">
+                        <ScrollViewer>
+                            <ItemsPresenter/>
+                        </ScrollViewer>
+                    </Border>
+                </Popup>
+            </Grid>
+        </ControlTemplate>
+
         <Style TargetType="ComboBox">
-            <Setter Property="Background" Value="#3C3C3C"/>
+            <Setter Property="Template"   Value="{StaticResource DarkComboBox}"/>
             <Setter Property="Foreground" Value="#E0E0E0"/>
-            <Setter Property="BorderBrush" Value="#555"/>
-            <Setter Property="Padding" Value="6,4"/>
+            <Setter Property="Background" Value="#3C3C3C"/>
+            <Setter Property="Height"     Value="30"/>
         </Style>
+
         <Style TargetType="ComboBoxItem">
-            <Setter Property="Background" Value="#3C3C3C"/>
+            <Setter Property="Background" Value="#2E2E2E"/>
             <Setter Property="Foreground" Value="#E0E0E0"/>
+            <Setter Property="Padding"    Value="8,4"/>
+            <Style.Triggers>
+                <Trigger Property="IsHighlighted" Value="True">
+                    <Setter Property="Background" Value="#1565C0"/>
+                    <Setter Property="Foreground" Value="White"/>
+                </Trigger>
+            </Style.Triggers>
         </Style>
-        <!-- Default button style -->
+
+        <!-- ── Dark Button (enabled and disabled) ───────────────────────── -->
         <Style TargetType="Button">
-            <Setter Property="Foreground" Value="#E0E0E0"/>
             <Setter Property="BorderThickness" Value="0"/>
-            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Cursor"          Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Bd"
+                                Background="{TemplateBinding Background}"
+                                CornerRadius="3" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center"
+                                              VerticalAlignment="Center"
+                                              TextBlock.Foreground="{TemplateBinding Foreground}"
+                                              TextBlock.FontWeight="{TemplateBinding FontWeight}"
+                                              TextBlock.FontSize="{TemplateBinding FontSize}"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Opacity" Value="0.85"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Bd" Property="Opacity" Value="0.7"/>
+                            </Trigger>
+                            <!-- Disabled: keep background, just dim slightly -->
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="Bd" Property="Opacity" Value="0.45"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
         </Style>
+
     </Window.Resources>
 
     <Grid Margin="10">
@@ -73,7 +155,6 @@
             <ScrollViewer VerticalScrollBarVisibility="Auto">
                 <StackPanel>
 
-                    <!-- Camera -->
                     <TextBlock Text="Camera" FontSize="13" FontWeight="Bold"
                                Foreground="#4DA6FF" Margin="0,0,0,8"/>
                     <Grid Margin="0,0,0,6">
@@ -87,22 +168,20 @@
                                 Click="RefreshCameras_Click" ToolTip="Refresh camera list"/>
                     </Grid>
 
-                    <!-- Open / Close buttons — high contrast -->
                     <Button x:Name="OpenButton"
                             Content="▶  Open Camera"
                             Background="#1565C0" Foreground="White"
                             FontWeight="Bold" FontSize="13"
-                            Padding="8,8" Margin="0,0,0,4"
+                            Padding="8,9" Margin="0,0,0,4"
                             Click="OpenCamera_Click"/>
                     <Button x:Name="CloseButton"
                             Content="■  Close Camera"
-                            Background="#555" Foreground="#CCCCCC"
-                            FontSize="13" Padding="8,8"
+                            Background="#5A5A5A" Foreground="#E0E0E0"
+                            FontSize="13" Padding="8,9"
                             IsEnabled="False" Click="CloseCamera_Click"/>
 
                     <Separator Background="#444" Margin="0,14"/>
 
-                    <!-- Stage selector -->
                     <TextBlock Text="Pipeline Stage" FontSize="13" FontWeight="Bold"
                                Foreground="#4DA6FF" Margin="0,0,0,4"/>
                     <TextBlock TextWrapping="Wrap" Foreground="#888" FontSize="10" Margin="0,0,0,10">
@@ -110,7 +189,6 @@ Select a stage then Open Camera.
 The first stage that shows no image = the culprit.
                     </TextBlock>
 
-                    <!-- Stage buttons: selected = bright blue bg + BLACK text for contrast -->
                     <Button x:Name="S0Btn" Tag="0" Click="Stage_Click"
                             Content="Stage 0 — Read() direct, no processing"
                             Padding="8,8" Margin="0,0,0,3" FontSize="11"
