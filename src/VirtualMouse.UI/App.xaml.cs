@@ -3,7 +3,6 @@ using Microsoft.Extensions.Logging;
 using System.Windows;
 using System.Windows.Threading;
 using VirtualMouse.Core;
-using VirtualMouse.Input;
 using VirtualMouse.Vision;
 
 namespace VirtualMouse.UI;
@@ -31,30 +30,21 @@ public partial class App : Application
         {
             var services = new ServiceCollection();
 
-            services.AddLogging(builder =>
+            services.AddLogging(b =>
             {
-                builder.AddConsole();
-                builder.SetMinimumLevel(LogLevel.Debug);
+                b.AddConsole();
+                b.SetMinimumLevel(LogLevel.Debug);
             });
 
-            // Settings persistence
+            // Settings (needed for camera index + resolution)
             services.AddSingleton<SettingsService>();
             services.AddSingleton<TrackingSettings>(sp =>
                 sp.GetRequiredService<SettingsService>().Load());
 
-            // Core
-            services.AddSingleton<MarkerGrouper>();
-            services.AddSingleton<GestureRecognizer>();
-
-            // Vision
-            services.AddSingleton<CameraCapture>();
-            services.AddSingleton<MarkerDetector>();
+            // Camera enumeration
             services.AddSingleton<CameraEnumerator>();
 
-            // Input
-            services.AddSingleton<WindowsMouseController>();
-
-            // UI
+            // Minimal window — no detection, no gesture, no mouse
             services.AddSingleton<MainWindow>();
 
             Services = services.BuildServiceProvider();
@@ -69,11 +59,5 @@ public partial class App : Application
                 MessageBoxImage.Error);
             Shutdown(1);
         }
-    }
-
-    protected override void OnExit(ExitEventArgs e)
-    {
-        Services?.GetService<WindowsMouseController>()?.ReleaseAll();
-        base.OnExit(e);
     }
 }
