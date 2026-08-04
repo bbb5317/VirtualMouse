@@ -47,7 +47,8 @@ public class CameraEnumerator
             {
                 try
                 {
-                    using var cap = new VideoCapture(i, VideoCaptureAPIs.DSHOW);
+                    // Use MSMF — ArduCam docs say DSHOW causes black frames on their cameras
+                    using var cap = new VideoCapture(i, VideoCaptureAPIs.MSMF);
                     if (cap.IsOpened())
                     {
                         devices.Add(new CameraDeviceInfo(i, names[i]));
@@ -68,7 +69,8 @@ public class CameraEnumerator
             {
                 try
                 {
-                    using var cap = new VideoCapture(i, VideoCaptureAPIs.DSHOW);
+                    // Use MSMF — ArduCam docs say DSHOW causes black frames on their cameras
+                    using var cap = new VideoCapture(i, VideoCaptureAPIs.MSMF);
                     if (cap.IsOpened())
                         devices.Add(new CameraDeviceInfo(i, $"Camera {i} (Index {i})"));
                 }
