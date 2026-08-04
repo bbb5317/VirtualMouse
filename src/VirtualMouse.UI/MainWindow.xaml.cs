@@ -62,7 +62,9 @@ public partial class MainWindow : System.Windows.Window
         }
 
         // Open the camera — resolution only, nothing else
-        _capture = new VideoCapture(device.Index, VideoCaptureAPIs.DSHOW);
+        // ArduCam documentation explicitly recommends CAP_MSMF (Windows Media Foundation)
+        // over CAP_DSHOW for this camera. DSHOW causes low FPS and black frames.
+        _capture = new VideoCapture(device.Index, VideoCaptureAPIs.MSMF);
         if (!_capture.IsOpened())
         {
             MessageBox.Show($"Could not open camera index {device.Index}.", "Error",
