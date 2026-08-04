@@ -62,9 +62,18 @@ public class MarkerDetector : IDisposable
 
     private const int FastWindowRadius = 30; // px in full-res coords to search around each marker
 
+    // Minimum number of slow passes required before identification is considered complete.
+    // We need at least 2 passes to measure displacement (pass 1 = baseline, pass 2 = compare).
+    private const int MinSlowPassesRequired = 3;
+
     // ── Public state ───────────────────────────────────────────────────────
 
-    public bool IsIdentifying => _framesSeen < _settings.IdentifyFrames;
+    /// <summary>
+    /// True while the system is still learning which blobs are markers.
+    /// Requires at least MinSlowPassesRequired slow passes AND at least one
+    /// confirmed marker to be found before identification is considered done.
+    /// </summary>
+    public bool IsIdentifying => SlowPassCount < MinSlowPassesRequired || _confirmedMarkers.Length == 0;
 
     // ── Constructor ────────────────────────────────────────────────────────
 

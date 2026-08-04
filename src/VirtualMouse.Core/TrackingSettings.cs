@@ -40,13 +40,14 @@ public class TrackingSettings
     /// At 120fps: 60 = every 0.5s, 120 = every 1s.
     /// Lower = faster re-identification but more CPU on the slow pass.
     /// </summary>
-    public int IdentifyInterval { get; set; } = 60;
+    public int IdentifyInterval { get; set; } = 30;
 
     /// <summary>
     /// Number of frames to collect before the first identification pass.
     /// During this period all blobs are shown but no gesture logic runs.
+    /// Kept at 30 so the first slow pass happens quickly.
     /// </summary>
-    public int IdentifyFrames { get; set; } = 60;
+    public int IdentifyFrames { get; set; } = 30;
 
     /// <summary>
     /// Minimum displacement (pixels) a blob must show between two consecutive
