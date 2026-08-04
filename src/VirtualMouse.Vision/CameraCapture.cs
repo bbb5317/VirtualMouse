@@ -5,27 +5,15 @@ using Microsoft.Extensions.Logging;
 namespace VirtualMouse.Vision;
 
 /// <summary>
-/// Manages camera capture using a two-thread design to prevent buffer backlog.
-///
-/// KEY FIX — MJPEG format negotiation:
-///   The OV9281 natively outputs MJPEG and YUV2 only. OpenCV's DirectShow
-///   backend requests BGR24 by default. When DirectShow cannot negotiate
-///   BGR24, the camera firmware enters a stuck state producing black frames
-///   that persists until the USB cable is physically unplugged.
-///   Setting FourCC = MJPG before resolution forces DirectShow to negotiate
-///   MJPEG, which the camera supports. OpenCV decodes it to BGR internally.
-///
-/// TWO-THREAD DESIGN (prevents slow-motion buffer backlog):
-///   GRAB THREAD: calls Read() in a tight loop, always keeping only the
-///     latest frame in a slot. This drains the DirectShow buffer continuously
-///     so stale frames never accumulate.
-///   PROCESS THREAD: picks up the latest frame and raises FrameReady.
-///     Always sees the current frame, never a stale one.
+/// Camera capture with optional two-thread design.
+/// useTwoThreads=false → single CaptureLoop (Stage 1 baseline).
+/// useTwoThreads=true  → separate grab + process threads (Stage 2+).
 /// </summary>
 public sealed class CameraCapture : IDisposable
 {
     private readonly ILogger<CameraCapture> _logger;
     private readonly TrackingSettings _settings;
+    private readonly bool _useTwoThreads;
 
     private VideoCapture? _capture;
     private volatile bool _isRunning;
@@ -40,10 +28,14 @@ public sealed class CameraCapture : IDisposable
     public event EventHandler<Mat>? FrameReady;
     public bool IsOpen => _capture?.IsOpened() ?? false;
 
-    public CameraCapture(ILogger<CameraCapture> logger, TrackingSettings settings)
+    public CameraCapture(
+        ILogger<CameraCapture> logger,
+        TrackingSettings settings,
+        bool useTwoThreads = true)
     {
         _logger = logger;
         _settings = settings;
+        _useTwoThreads = useTwoThreads;
     }
 
     public bool Open()
@@ -57,20 +49,20 @@ public sealed class CameraCapture : IDisposable
                 return false;
             }
 
-            // CRITICAL: set MJPEG format FIRST, before resolution.
+            // CRITICAL: set MJPEG format FIRST.
             // The OV9281 only outputs MJPEG and YUV2. Without this, OpenCV
-            // requests BGR24 which the camera cannot deliver, causing a
-            // format negotiation failure that corrupts the sensor state.
+            // requests BGR24 which the camera cannot deliver.
             _capture.Set(VideoCaptureProperties.FourCC,
                 VideoWriter.FourCC('M', 'J', 'P', 'G'));
-
             _capture.Set(VideoCaptureProperties.FrameWidth,  _settings.FrameWidth);
             _capture.Set(VideoCaptureProperties.FrameHeight, _settings.FrameHeight);
 
             var w   = _capture.Get(VideoCaptureProperties.FrameWidth);
             var h   = _capture.Get(VideoCaptureProperties.FrameHeight);
             var fps = _capture.Get(VideoCaptureProperties.Fps);
-            _logger.LogInformation("Camera ready: {W}x{H} @ {FPS}fps (MJPEG)", w, h, fps);
+            _logger.LogInformation(
+                "Camera ready: {W}x{H} @ {FPS}fps (MJPEG, twoThreads={T})",
+                w, h, fps, _useTwoThreads);
             return true;
         }
         catch (Exception ex)
@@ -86,9 +78,32 @@ public sealed class CameraCapture : IDisposable
         _isRunning     = true;
         _frameSerial   = 0;
         _lastProcessed = -1;
-        _grabTask    = Task.Run(() => GrabLoop(cancellationToken),    cancellationToken);
-        _processTask = Task.Run(() => ProcessLoop(cancellationToken), cancellationToken);
+
+        if (_useTwoThreads)
+        {
+            _grabTask    = Task.Run(() => GrabLoop(cancellationToken),    cancellationToken);
+            _processTask = Task.Run(() => ProcessLoop(cancellationToken), cancellationToken);
+        }
+        else
+        {
+            _grabTask = Task.Run(() => SingleThreadLoop(cancellationToken), cancellationToken);
+        }
     }
+
+    // ── Single-thread loop (Stage 1) ───────────────────────────────────────
+
+    private void SingleThreadLoop(CancellationToken ct)
+    {
+        using var frame = new Mat();
+        while (_isRunning && !ct.IsCancellationRequested)
+        {
+            if (!_capture!.Read(frame) || frame.Empty()) { Thread.Sleep(10); continue; }
+            FrameReady?.Invoke(this, frame.Clone());
+        }
+        _logger.LogDebug("Single-thread loop exited.");
+    }
+
+    // ── Two-thread grab loop (Stage 2+) ────────────────────────────────────
 
     private void GrabLoop(CancellationToken ct)
     {
@@ -125,6 +140,8 @@ public sealed class CameraCapture : IDisposable
         }
         _logger.LogDebug("Process thread exited.");
     }
+
+    // ── Stop / Dispose ─────────────────────────────────────────────────────
 
     public void Stop()
     {
