@@ -2,66 +2,74 @@ namespace VirtualMouse.Core;
 
 /// <summary>
 /// Configuration settings for the tracking and gesture recognition pipeline.
-/// These values can be adjusted via the UI calibration panel.
+/// All values are persisted to disk and restored on next launch.
 /// </summary>
 public class TrackingSettings
 {
-    /// <summary>
-    /// Multiplier applied to raw pixel delta to produce screen pixel movement.
-    /// Higher values = faster cursor movement.
-    /// </summary>
-    public double MouseSensitivity { get; set; } = 2.5;
+    // ── Camera ─────────────────────────────────────────────────────────────
 
-    /// <summary>
-    /// Minimum pixel movement in the camera frame required to register a mouse move.
-    /// Prevents micro-jitter from the hand from causing unwanted cursor drift.
-    /// </summary>
-    public double DeadZonePixels { get; set; } = 0.5;
+    public int CameraDeviceIndex { get; set; } = 0;
+    public int FrameWidth        { get; set; } = 1280;
+    public int FrameHeight       { get; set; } = 800;
+    public int TargetFps         { get; set; } = 120;
 
-    /// <summary>
-    /// Maximum pixel distance between left thumb and left index centroids to register a pinch (click).
-    /// </summary>
-    public double PinchThresholdPixels { get; set; } = 30.0;
+    // ── Vision / Detection ─────────────────────────────────────────────────
 
-    /// <summary>
-    /// Brightness threshold (0-255) for the binary thresholding step.
-    /// Pixels above this value are considered part of a reflective marker.
-    /// </summary>
+    /// <summary>Brightness threshold (0-255) for binary thresholding.</summary>
     public int BrightnessThreshold { get; set; } = 200;
 
-    /// <summary>
-    /// Minimum blob area in pixels to be considered a valid marker (filters noise).
-    /// </summary>
+    /// <summary>Minimum blob area in pixels (noise filter).</summary>
     public double MinBlobArea { get; set; } = 5.0;
 
-    /// <summary>
-    /// Maximum blob area in pixels to be considered a valid marker (filters large reflections).
-    /// </summary>
+    /// <summary>Maximum blob area in pixels (large-reflection filter).</summary>
     public double MaxBlobArea { get; set; } = 500.0;
 
-    /// <summary>
-    /// Maximum pixel distance between two blobs to be considered part of the same finger group.
-    /// </summary>
+    /// <summary>Maximum pixel distance between blobs to be grouped into one finger.</summary>
     public double GroupingDistancePixels { get; set; } = 60.0;
 
-    /// <summary>
-    /// Camera device index (0 = first camera, 1 = second, etc.).
-    /// </summary>
-    public int CameraDeviceIndex { get; set; } = 0;
+    // ── Mouse Movement ─────────────────────────────────────────────────────
+
+    /// <summary>Screen pixels moved per camera pixel of finger movement.</summary>
+    public double MouseSensitivity { get; set; } = 2.5;
+
+    /// <summary>Minimum camera-pixel movement before cursor moves (jitter filter).</summary>
+    public double DeadZonePixels { get; set; } = 0.5;
+
+    // ── Activation Gesture (Left Hand Pinch) ──────────────────────────────
 
     /// <summary>
-    /// Target frame width to request from the camera.
+    /// Distance (in camera pixels) between the left thumb and left index centroids
+    /// that serves as the activation threshold.
+    /// Mouse control is ACTIVE when the distance is GREATER than this value
+    /// (fingers spread apart = mouse on).
+    /// Mouse control is INACTIVE when the distance is LESS than this value
+    /// (fingers pinched together = mouse off).
+    /// Set to -1 if not yet calibrated.
     /// </summary>
-    public int FrameWidth { get; set; } = 1280;
+    public double ActivationThresholdPixels { get; set; } = -1;
 
     /// <summary>
-    /// Target frame height to request from the camera.
+    /// Hysteresis band around the activation threshold to prevent rapid on/off toggling.
+    /// The mouse activates at (threshold + hysteresis) and deactivates at (threshold - hysteresis).
     /// </summary>
-    public int FrameHeight { get; set; } = 800;
+    public double ActivationHysteresisPixels { get; set; } = 15.0;
+
+    // ── Click Gestures (Right Hand Taps) ──────────────────────────────────
 
     /// <summary>
-    /// Target frames per second to request from the camera.
-    /// The OV9281 supports up to 120fps at 1280x800.
+    /// Maximum duration in milliseconds for a tap to be recognised as a click
+    /// (as opposed to a hold/drag).
     /// </summary>
-    public int TargetFps { get; set; } = 120;
+    public int TapMaxDurationMs { get; set; } = 300;
+
+    /// <summary>
+    /// Minimum distance (camera pixels) the right index finger must move downward
+    /// (toward the keyboard) within TapMaxDurationMs to register as a tap.
+    /// </summary>
+    public double TapMinMovementPixels { get; set; } = 8.0;
+
+    /// <summary>
+    /// Duration in milliseconds after which a held-down tap becomes a click-and-hold (drag).
+    /// </summary>
+    public int HoldThresholdMs { get; set; } = 500;
 }
