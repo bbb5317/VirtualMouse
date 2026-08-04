@@ -122,9 +122,8 @@ public partial class MainWindow : System.Windows.Window
     }
 
     /// <summary>
-    /// Converts an OpenCV BGR Mat to a WPF-compatible BitmapSource without using
-    /// OpenCvSharp.Extensions.BitmapSourceConverter (which is not present in net8.0).
-    /// Uses WriteableBitmap with direct pixel copy for maximum performance.
+    /// Converts an OpenCV Mat to a WPF-compatible BitmapSource.
+    /// Uses WriteableBitmap.WritePixels with a managed byte array — no unsafe code required.
     /// </summary>
     private static BitmapSource MatToBitmapSource(Mat mat)
     {
@@ -140,29 +139,20 @@ public partial class MainWindow : System.Windows.Window
 
         int width  = bgr.Width;
         int height = bgr.Height;
-        int stride = (int)bgr.Step();
+        int stride = (int)bgr.Step(); // bytes per row (may include padding)
+
+        // Extract pixel data into a managed byte array
+        var pixelData = new byte[stride * height];
+        Marshal.Copy(bgr.Data, pixelData, 0, pixelData.Length);
 
         var bitmap = new WriteableBitmap(width, height, 96, 96, PixelFormats.Bgr24, null);
-        bitmap.Lock();
-        try
-        {
-            // Copy pixel data directly from the Mat's unmanaged buffer to the WriteableBitmap
-            unsafe
-            {
-                Buffer.MemoryCopy(
-                    bgr.DataPointer.ToPointer(),
-                    bitmap.BackBuffer.ToPointer(),
-                    (long)bitmap.BackBufferStride * height,
-                    (long)stride * height);
-            }
-            bitmap.AddDirtyRect(new Int32Rect(0, 0, width, height));
-        }
-        finally
-        {
-            bitmap.Unlock();
-            if (needDispose) bgr.Dispose();
-        }
+        bitmap.WritePixels(
+            new Int32Rect(0, 0, width, height),
+            pixelData,
+            stride,
+            0);
 
+        if (needDispose) bgr.Dispose();
         return bitmap;
     }
 
