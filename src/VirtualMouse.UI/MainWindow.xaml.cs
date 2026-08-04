@@ -18,11 +18,18 @@ public partial class MainWindow : System.Windows.Window
     private readonly MarkerGrouper _grouper;
     private readonly GestureRecognizer _gestureRecognizer;
     private readonly WindowsMouseController _mouseController;
-    private readonly TrackingSettings _settings;
+    private readonly CameraEnumerator _cameraEnumerator;
+    private readonly SettingsService _settingsService;
+
+    // Settings is loaded from disk at startup and saved on every change
+    private TrackingSettings _settings;
 
     private CancellationTokenSource? _cts;
     private readonly Stopwatch _fpsStopwatch = Stopwatch.StartNew();
     private int _frameCount;
+
+    // Suppress slider events while we are programmatically loading settings
+    private bool _loadingSettings;
 
     public MainWindow(
         CameraCapture camera,
@@ -30,28 +37,88 @@ public partial class MainWindow : System.Windows.Window
         MarkerGrouper grouper,
         GestureRecognizer gestureRecognizer,
         WindowsMouseController mouseController,
+        CameraEnumerator cameraEnumerator,
+        SettingsService settingsService,
         TrackingSettings settings)
     {
-        InitializeComponent();
         _camera = camera;
         _detector = detector;
         _grouper = grouper;
         _gestureRecognizer = gestureRecognizer;
         _mouseController = mouseController;
+        _cameraEnumerator = cameraEnumerator;
+        _settingsService = settingsService;
         _settings = settings;
 
+        InitializeComponent();
+
         Closing += (_, _) => StopTracking();
+
+        // Show where settings are persisted
+        SettingsPathLabel.Text = $"Settings: {SettingsService.GetSettingsPath()}";
+
+        // Populate camera list and restore all saved values
+        RefreshCameraList();
+        ApplySettingsToUI();
     }
+
+    // ── Camera Enumeration ─────────────────────────────────────────────────
+
+    private void RefreshCameraList()
+    {
+        CameraComboBox.Items.Clear();
+
+        var devices = _cameraEnumerator.Enumerate();
+        if (devices.Count == 0)
+        {
+            CameraComboBox.Items.Add(new CameraDeviceInfo(-1, "No cameras found"));
+            CameraComboBox.SelectedIndex = 0;
+            StartButton.IsEnabled = false;
+            return;
+        }
+
+        foreach (var device in devices)
+            CameraComboBox.Items.Add(device);
+
+        // Restore previously selected camera, fall back to first available
+        var savedIndex = _settings.CameraDeviceIndex;
+        var match = devices.FirstOrDefault(d => d.Index == savedIndex);
+        CameraComboBox.SelectedItem = match ?? devices[0];
+        StartButton.IsEnabled = true;
+    }
+
+    private void RefreshCameras_Click(object sender, RoutedEventArgs e)
+    {
+        RefreshCameraList();
+    }
+
+    private void CameraComboBox_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+    {
+        if (CameraComboBox.SelectedItem is CameraDeviceInfo device && device.Index >= 0)
+        {
+            _settings.CameraDeviceIndex = device.Index;
+            _settingsService.Save(_settings);
+        }
+    }
+
+    // ── Start / Stop ───────────────────────────────────────────────────────
 
     private void StartButton_Click(object sender, RoutedEventArgs e)
     {
-        if (int.TryParse(CameraIndexBox.Text, out int idx))
-            _settings.CameraDeviceIndex = idx;
+        if (CameraComboBox.SelectedItem is not CameraDeviceInfo device || device.Index < 0)
+        {
+            MessageBox.Show("Please select a valid camera device.", "No Camera Selected",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        _settings.CameraDeviceIndex = device.Index;
 
         if (!_camera.Open())
         {
-            MessageBox.Show("Failed to open camera. Check device index and connection.", "Camera Error",
-                MessageBoxButton.OK, MessageBoxImage.Error);
+            MessageBox.Show(
+                $"Failed to open camera \"{device.Name}\".\n\nCheck that it is connected and not in use by another application.",
+                "Camera Error", MessageBoxButton.OK, MessageBoxImage.Error);
             return;
         }
 
@@ -61,6 +128,7 @@ public partial class MainWindow : System.Windows.Window
 
         StartButton.IsEnabled = false;
         StopButton.IsEnabled = true;
+        CameraComboBox.IsEnabled = false;
         StatusLabel.Text = "Running";
         StatusLabel.Foreground = (Brush)FindResource("GreenBrush");
     }
@@ -79,24 +147,24 @@ public partial class MainWindow : System.Windows.Window
         {
             StartButton.IsEnabled = true;
             StopButton.IsEnabled = false;
+            CameraComboBox.IsEnabled = true;
             StatusLabel.Text = "Stopped";
             StatusLabel.Foreground = (Brush)FindResource("RedBrush");
         });
     }
 
+    // ── Frame Processing ───────────────────────────────────────────────────
+
     private void OnFrameReady(object? sender, Mat frame)
     {
         using (frame)
         {
-            // --- Vision Pipeline ---
             var blobs   = _detector.Detect(frame);
             var groups  = _grouper.Group(blobs);
             var gesture = _gestureRecognizer.Process(groups);
 
-            // --- Input Injection ---
             _mouseController.Apply(gesture);
 
-            // --- UI Update (throttled to ~10 updates/sec to avoid overwhelming WPF) ---
             _frameCount++;
             if (_fpsStopwatch.ElapsedMilliseconds >= 100)
             {
@@ -121,13 +189,83 @@ public partial class MainWindow : System.Windows.Window
         }
     }
 
+    // ── Settings Persistence ───────────────────────────────────────────────
+
     /// <summary>
-    /// Converts an OpenCV Mat to a WPF-compatible BitmapSource.
-    /// Uses WriteableBitmap.WritePixels with a managed byte array — no unsafe code required.
+    /// Pushes the current _settings values into all UI controls without triggering saves.
     /// </summary>
+    private void ApplySettingsToUI()
+    {
+        _loadingSettings = true;
+        try
+        {
+            ThresholdSlider.Value  = _settings.BrightnessThreshold;
+            SensitivitySlider.Value = _settings.MouseSensitivity;
+            PinchSlider.Value      = _settings.PinchThresholdPixels;
+
+            ThresholdLabel.Text   = $"{_settings.BrightnessThreshold}";
+            SensitivityLabel.Text = $"{_settings.MouseSensitivity:F1}";
+            PinchLabel.Text       = $"{(int)_settings.PinchThresholdPixels}";
+        }
+        finally
+        {
+            _loadingSettings = false;
+        }
+    }
+
+    private void ResetDefaults_Click(object sender, RoutedEventArgs e)
+    {
+        var result = MessageBox.Show(
+            "Reset all settings to factory defaults?\n\nThis will clear your camera selection and all calibration values.",
+            "Reset to Defaults",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Question);
+
+        if (result != MessageBoxResult.Yes) return;
+
+        _settingsService.Reset();
+        _settings = _settingsService.Load(); // returns a fresh default instance
+
+        // Propagate new defaults into the injected singletons
+        _settings.CameraDeviceIndex     = new TrackingSettings().CameraDeviceIndex;
+        _settings.BrightnessThreshold   = new TrackingSettings().BrightnessThreshold;
+        _settings.MouseSensitivity      = new TrackingSettings().MouseSensitivity;
+        _settings.PinchThresholdPixels  = new TrackingSettings().PinchThresholdPixels;
+
+        ApplySettingsToUI();
+        RefreshCameraList();
+    }
+
+    // ── Slider Handlers ────────────────────────────────────────────────────
+
+    private void ThresholdSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (_settings == null || _loadingSettings) return;
+        _settings.BrightnessThreshold = (int)e.NewValue;
+        if (ThresholdLabel != null) ThresholdLabel.Text = $"{(int)e.NewValue}";
+        _settingsService.Save(_settings);
+    }
+
+    private void SensitivitySlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (_settings == null || _loadingSettings) return;
+        _settings.MouseSensitivity = e.NewValue;
+        if (SensitivityLabel != null) SensitivityLabel.Text = $"{e.NewValue:F1}";
+        _settingsService.Save(_settings);
+    }
+
+    private void PinchSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (_settings == null || _loadingSettings) return;
+        _settings.PinchThresholdPixels = e.NewValue;
+        if (PinchLabel != null) PinchLabel.Text = $"{(int)e.NewValue}";
+        _settingsService.Save(_settings);
+    }
+
+    // ── Helpers ────────────────────────────────────────────────────────────
+
     private static BitmapSource MatToBitmapSource(Mat mat)
     {
-        // Ensure the frame is BGR (3-channel) for WPF Bgr24 pixel format
         Mat bgr = mat;
         bool needDispose = false;
         if (mat.Channels() == 1)
@@ -139,18 +277,13 @@ public partial class MainWindow : System.Windows.Window
 
         int width  = bgr.Width;
         int height = bgr.Height;
-        int stride = (int)bgr.Step(); // bytes per row (may include padding)
+        int stride = (int)bgr.Step();
 
-        // Extract pixel data into a managed byte array
         var pixelData = new byte[stride * height];
         Marshal.Copy(bgr.Data, pixelData, 0, pixelData.Length);
 
         var bitmap = new WriteableBitmap(width, height, 96, 96, PixelFormats.Bgr24, null);
-        bitmap.WritePixels(
-            new Int32Rect(0, 0, width, height),
-            pixelData,
-            stride,
-            0);
+        bitmap.WritePixels(new Int32Rect(0, 0, width, height), pixelData, stride, 0);
 
         if (needDispose) bgr.Dispose();
         return bitmap;
@@ -161,38 +294,13 @@ public partial class MainWindow : System.Windows.Window
         var green = (Brush)FindResource("GreenBrush");
         var red   = (Brush)FindResource("RedBrush");
 
-        LeftThumbStatus.Text       = groups.ContainsKey(FingerIdentity.LeftThumb)    ? "OK" : "Lost";
-        LeftThumbStatus.Foreground = groups.ContainsKey(FingerIdentity.LeftThumb)    ? green : red;
-
-        LeftIndexStatus.Text       = groups.ContainsKey(FingerIdentity.LeftIndex)    ? "OK" : "Lost";
-        LeftIndexStatus.Foreground = groups.ContainsKey(FingerIdentity.LeftIndex)    ? green : red;
-
-        RightIndexStatus.Text       = groups.ContainsKey(FingerIdentity.RightIndex)  ? "OK" : "Lost";
-        RightIndexStatus.Foreground = groups.ContainsKey(FingerIdentity.RightIndex)  ? green : red;
-
+        LeftThumbStatus.Text        = groups.ContainsKey(FingerIdentity.LeftThumb)    ? "OK" : "Lost";
+        LeftThumbStatus.Foreground  = groups.ContainsKey(FingerIdentity.LeftThumb)    ? green : red;
+        LeftIndexStatus.Text        = groups.ContainsKey(FingerIdentity.LeftIndex)    ? "OK" : "Lost";
+        LeftIndexStatus.Foreground  = groups.ContainsKey(FingerIdentity.LeftIndex)    ? green : red;
+        RightIndexStatus.Text       = groups.ContainsKey(FingerIdentity.RightIndex)   ? "OK" : "Lost";
+        RightIndexStatus.Foreground = groups.ContainsKey(FingerIdentity.RightIndex)   ? green : red;
         RightMiddleStatus.Text       = groups.ContainsKey(FingerIdentity.RightMiddle) ? "OK" : "Lost";
         RightMiddleStatus.Foreground = groups.ContainsKey(FingerIdentity.RightMiddle) ? green : red;
-    }
-
-    private void ThresholdSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
-    {
-        // Guard: XAML fires ValueChanged during InitializeComponent() before _settings is injected
-        if (_settings == null) return;
-        _settings.BrightnessThreshold = (int)e.NewValue;
-        if (ThresholdLabel != null) ThresholdLabel.Text = $"{(int)e.NewValue}";
-    }
-
-    private void SensitivitySlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
-    {
-        if (_settings == null) return;
-        _settings.MouseSensitivity = e.NewValue;
-        if (SensitivityLabel != null) SensitivityLabel.Text = $"{e.NewValue:F1}";
-    }
-
-    private void PinchSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
-    {
-        if (_settings == null) return;
-        _settings.PinchThresholdPixels = e.NewValue;
-        if (PinchLabel != null) PinchLabel.Text = $"{(int)e.NewValue}";
     }
 }

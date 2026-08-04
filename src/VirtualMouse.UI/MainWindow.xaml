@@ -10,7 +10,7 @@
     <Grid Margin="10">
         <Grid.ColumnDefinitions>
             <ColumnDefinition Width="*"/>
-            <ColumnDefinition Width="280"/>
+            <ColumnDefinition Width="290"/>
         </Grid.ColumnDefinitions>
 
         <!-- Left: Camera Preview -->
@@ -40,91 +40,139 @@
         </Border>
 
         <!-- Right: Controls & Calibration -->
-        <StackPanel Grid.Column="1" Background="{StaticResource PanelBrush}">
-            <Border Background="{StaticResource PanelBrush}" CornerRadius="4" Padding="10">
+        <Border Grid.Column="1" Background="{StaticResource PanelBrush}" CornerRadius="4" Padding="12">
+            <ScrollViewer VerticalScrollBarVisibility="Auto">
                 <StackPanel>
+
+                    <!-- ── Controls ── -->
                     <TextBlock Text="Controls" FontSize="14" FontWeight="Bold"
                                Foreground="{StaticResource AccentBrush}" Margin="0,0,0,10"/>
 
-                    <TextBlock Text="Camera Device Index:" Margin="0,4,0,2"/>
-                    <TextBox x:Name="CameraIndexBox" Text="0" Background="#3C3C3C" Foreground="{StaticResource TextBrush}"
-                             BorderBrush="{StaticResource AccentBrush}" Padding="4"/>
+                    <!-- Camera Device Dropdown -->
+                    <TextBlock Text="Camera Device:" Margin="0,0,0,3"/>
+                    <Grid Margin="0,0,0,6">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <ComboBox x:Name="CameraComboBox"
+                                  Grid.Column="0"
+                                  Background="#3C3C3C" Foreground="{StaticResource TextBrush}"
+                                  BorderBrush="{StaticResource AccentBrush}"
+                                  Padding="6,4"
+                                  SelectionChanged="CameraComboBox_SelectionChanged"/>
+                        <Button Grid.Column="1" Content="↻" ToolTip="Refresh camera list"
+                                Margin="4,0,0,0" Padding="8,4"
+                                Background="#3C3C3C" Foreground="{StaticResource TextBrush}"
+                                BorderBrush="{StaticResource AccentBrush}"
+                                Click="RefreshCameras_Click" FontSize="14"/>
+                    </Grid>
 
-                    <Button x:Name="StartButton" Content="▶  Start Tracking" Margin="0,10,0,4"
+                    <Button x:Name="StartButton" Content="▶  Start Tracking" Margin="0,4,0,4"
                             Background="{StaticResource AccentBrush}" Foreground="White"
                             FontWeight="Bold" Padding="8,6" Click="StartButton_Click"/>
-                    <Button x:Name="StopButton" Content="■  Stop Tracking" Margin="0,0,0,10"
+                    <Button x:Name="StopButton" Content="■  Stop Tracking" Margin="0,0,0,4"
                             Background="#555" Foreground="White" Padding="8,6"
                             IsEnabled="False" Click="StopButton_Click"/>
 
-                    <Separator Background="#444" Margin="0,8"/>
+                    <Separator Background="#444" Margin="0,10"/>
 
+                    <!-- ── Calibration ── -->
                     <TextBlock Text="Calibration" FontSize="13" FontWeight="Bold"
-                               Foreground="{StaticResource AccentBrush}" Margin="0,4,0,8"/>
+                               Foreground="{StaticResource AccentBrush}" Margin="0,0,0,8"/>
 
                     <!-- Brightness Threshold -->
                     <TextBlock Text="Brightness Threshold:"/>
-                    <StackPanel Orientation="Horizontal">
-                        <Slider x:Name="ThresholdSlider" Minimum="100" Maximum="254" Value="200"
-                                Width="180" VerticalAlignment="Center"
+                    <Grid Margin="0,2,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="38"/>
+                        </Grid.ColumnDefinitions>
+                        <Slider x:Name="ThresholdSlider" Grid.Column="0"
+                                Minimum="100" Maximum="254" Value="200"
+                                VerticalAlignment="Center"
                                 ValueChanged="ThresholdSlider_ValueChanged"/>
-                        <TextBlock x:Name="ThresholdLabel" Text="200" Width="35" Margin="6,0,0,0" VerticalAlignment="Center"/>
-                    </StackPanel>
+                        <TextBlock x:Name="ThresholdLabel" Grid.Column="1"
+                                   Text="200" Margin="6,0,0,0" VerticalAlignment="Center"/>
+                    </Grid>
 
                     <!-- Mouse Sensitivity -->
-                    <TextBlock Text="Mouse Sensitivity:" Margin="0,8,0,0"/>
-                    <StackPanel Orientation="Horizontal">
-                        <Slider x:Name="SensitivitySlider" Minimum="0.5" Maximum="10.0" Value="2.5"
-                                Width="180" VerticalAlignment="Center"
+                    <TextBlock Text="Mouse Sensitivity:"/>
+                    <Grid Margin="0,2,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="38"/>
+                        </Grid.ColumnDefinitions>
+                        <Slider x:Name="SensitivitySlider" Grid.Column="0"
+                                Minimum="0.5" Maximum="10.0" Value="2.5"
+                                VerticalAlignment="Center"
                                 ValueChanged="SensitivitySlider_ValueChanged"/>
-                        <TextBlock x:Name="SensitivityLabel" Text="2.5" Width="35" Margin="6,0,0,0" VerticalAlignment="Center"/>
-                    </StackPanel>
+                        <TextBlock x:Name="SensitivityLabel" Grid.Column="1"
+                                   Text="2.5" Margin="6,0,0,0" VerticalAlignment="Center"/>
+                    </Grid>
 
                     <!-- Pinch Threshold -->
-                    <TextBlock Text="Pinch Click Threshold (px):" Margin="0,8,0,0"/>
-                    <StackPanel Orientation="Horizontal">
-                        <Slider x:Name="PinchSlider" Minimum="10" Maximum="100" Value="30"
-                                Width="180" VerticalAlignment="Center"
+                    <TextBlock Text="Pinch Click Threshold (px):"/>
+                    <Grid Margin="0,2,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="38"/>
+                        </Grid.ColumnDefinitions>
+                        <Slider x:Name="PinchSlider" Grid.Column="0"
+                                Minimum="10" Maximum="100" Value="30"
+                                VerticalAlignment="Center"
                                 ValueChanged="PinchSlider_ValueChanged"/>
-                        <TextBlock x:Name="PinchLabel" Text="30" Width="35" Margin="6,0,0,0" VerticalAlignment="Center"/>
-                    </StackPanel>
+                        <TextBlock x:Name="PinchLabel" Grid.Column="1"
+                                   Text="30" Margin="6,0,0,0" VerticalAlignment="Center"/>
+                    </Grid>
+
+                    <!-- Reset Button -->
+                    <Button Content="↺  Reset to Defaults" Margin="0,4,0,0"
+                            Background="#6B2020" Foreground="White"
+                            Padding="8,6" Click="ResetDefaults_Click"/>
 
                     <Separator Background="#444" Margin="0,12"/>
 
-                    <!-- Finger Identity Status -->
+                    <!-- ── Marker Detection Status ── -->
                     <TextBlock Text="Marker Detection Status" FontSize="13" FontWeight="Bold"
                                Foreground="{StaticResource AccentBrush}" Margin="0,0,0,8"/>
 
                     <Grid>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="60"/>
+                            <ColumnDefinition Width="50"/>
                         </Grid.ColumnDefinitions>
                         <Grid.RowDefinitions>
-                            <RowDefinition/>
-                            <RowDefinition/>
-                            <RowDefinition/>
-                            <RowDefinition/>
+                            <RowDefinition Height="24"/>
+                            <RowDefinition Height="24"/>
+                            <RowDefinition Height="24"/>
+                            <RowDefinition Height="24"/>
                         </Grid.RowDefinitions>
 
-                        <TextBlock Grid.Row="0" Grid.Column="0" Text="Left Thumb (×1):" Margin="0,3"/>
-                        <TextBlock x:Name="LeftThumbStatus" Grid.Row="0" Grid.Column="1" Text="Lost" Foreground="{StaticResource RedBrush}"/>
+                        <TextBlock Grid.Row="0" Grid.Column="0" Text="Left Thumb (×1):" VerticalAlignment="Center"/>
+                        <TextBlock x:Name="LeftThumbStatus"  Grid.Row="0" Grid.Column="1" Text="Lost"
+                                   Foreground="{StaticResource RedBrush}" VerticalAlignment="Center"/>
 
-                        <TextBlock Grid.Row="1" Grid.Column="0" Text="Left Index (×3):" Margin="0,3"/>
-                        <TextBlock x:Name="LeftIndexStatus" Grid.Row="1" Grid.Column="1" Text="Lost" Foreground="{StaticResource RedBrush}"/>
+                        <TextBlock Grid.Row="1" Grid.Column="0" Text="Left Index (×3):" VerticalAlignment="Center"/>
+                        <TextBlock x:Name="LeftIndexStatus"  Grid.Row="1" Grid.Column="1" Text="Lost"
+                                   Foreground="{StaticResource RedBrush}" VerticalAlignment="Center"/>
 
-                        <TextBlock Grid.Row="2" Grid.Column="0" Text="Right Index (×3):" Margin="0,3"/>
-                        <TextBlock x:Name="RightIndexStatus" Grid.Row="2" Grid.Column="1" Text="Lost" Foreground="{StaticResource RedBrush}"/>
+                        <TextBlock Grid.Row="2" Grid.Column="0" Text="Right Index (×3):" VerticalAlignment="Center"/>
+                        <TextBlock x:Name="RightIndexStatus" Grid.Row="2" Grid.Column="1" Text="Lost"
+                                   Foreground="{StaticResource RedBrush}" VerticalAlignment="Center"/>
 
-                        <TextBlock Grid.Row="3" Grid.Column="0" Text="Right Middle (×3):" Margin="0,3"/>
-                        <TextBlock x:Name="RightMiddleStatus" Grid.Row="3" Grid.Column="1" Text="Lost" Foreground="{StaticResource RedBrush}"/>
+                        <TextBlock Grid.Row="3" Grid.Column="0" Text="Right Middle (×3):" VerticalAlignment="Center"/>
+                        <TextBlock x:Name="RightMiddleStatus" Grid.Row="3" Grid.Column="1" Text="Lost"
+                                   Foreground="{StaticResource RedBrush}" VerticalAlignment="Center"/>
                     </Grid>
 
                     <Separator Background="#444" Margin="0,12"/>
+                    <TextBlock x:Name="SettingsPathLabel" FontSize="9" Foreground="#555"
+                               TextWrapping="Wrap" Margin="0,0,0,4"/>
                     <TextBlock Text="v0.1.0 — Proof of Concept" FontSize="10"
                                Foreground="#666" HorizontalAlignment="Center"/>
                 </StackPanel>
-            </Border>
-        </StackPanel>
+            </ScrollViewer>
+        </Border>
     </Grid>
 </Window>

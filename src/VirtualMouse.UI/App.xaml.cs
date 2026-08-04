@@ -14,8 +14,6 @@ public partial class App : Application
 
     protected override void OnStartup(StartupEventArgs e)
     {
-        // Catch any unhandled exception on the UI thread and show it
-        // instead of silently crashing.
         DispatcherUnhandledException += (_, ex) =>
         {
             MessageBox.Show(
@@ -40,8 +38,15 @@ public partial class App : Application
                 builder.SetMinimumLevel(LogLevel.Debug);
             });
 
-            // Configuration (default settings; overridden by calibration UI)
-            services.AddSingleton<TrackingSettings>();
+            // Settings persistence service
+            services.AddSingleton<SettingsService>();
+
+            // Load persisted settings (or defaults if no file exists yet)
+            services.AddSingleton<TrackingSettings>(sp =>
+            {
+                var svc = sp.GetRequiredService<SettingsService>();
+                return svc.Load();
+            });
 
             // Core
             services.AddSingleton<MarkerGrouper>();
@@ -50,11 +55,12 @@ public partial class App : Application
             // Vision
             services.AddSingleton<CameraCapture>();
             services.AddSingleton<MarkerDetector>();
+            services.AddSingleton<CameraEnumerator>();
 
             // Input
             services.AddSingleton<WindowsMouseController>();
 
-            // UI — registered last so all dependencies are available
+            // UI
             services.AddSingleton<MainWindow>();
 
             Services = services.BuildServiceProvider();
