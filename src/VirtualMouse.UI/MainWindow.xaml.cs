@@ -291,16 +291,37 @@ public partial class MainWindow : System.Windows.Window
 
     private void UpdateFingerStatus(Dictionary<FingerIdentity, MarkerGroup> groups)
     {
-        var green = (Brush)FindResource("GreenBrush");
-        var red   = (Brush)FindResource("RedBrush");
+        var green  = (Brush)FindResource("GreenBrush");
+        var yellow = new SolidColorBrush(System.Windows.Media.Color.FromRgb(255, 200, 0));
+        var red    = (Brush)FindResource("RedBrush");
 
-        LeftThumbStatus.Text        = groups.ContainsKey(FingerIdentity.LeftThumb)    ? "OK" : "Lost";
-        LeftThumbStatus.Foreground  = groups.ContainsKey(FingerIdentity.LeftThumb)    ? green : red;
-        LeftIndexStatus.Text        = groups.ContainsKey(FingerIdentity.LeftIndex)    ? "OK" : "Lost";
-        LeftIndexStatus.Foreground  = groups.ContainsKey(FingerIdentity.LeftIndex)    ? green : red;
-        RightIndexStatus.Text       = groups.ContainsKey(FingerIdentity.RightIndex)   ? "OK" : "Lost";
-        RightIndexStatus.Foreground = groups.ContainsKey(FingerIdentity.RightIndex)   ? green : red;
-        RightMiddleStatus.Text       = groups.ContainsKey(FingerIdentity.RightMiddle) ? "OK" : "Lost";
-        RightMiddleStatus.Foreground = groups.ContainsKey(FingerIdentity.RightMiddle) ? green : red;
+        SetFingerStatus(LeftThumbStatus,   groups, FingerIdentity.LeftThumb,   green, yellow, red);
+        SetFingerStatus(LeftIndexStatus,   groups, FingerIdentity.LeftIndex,   green, yellow, red);
+        SetFingerStatus(RightIndexStatus,  groups, FingerIdentity.RightIndex,  green, yellow, red);
+        SetFingerStatus(RightMiddleStatus, groups, FingerIdentity.RightMiddle, green, yellow, red);
+    }
+
+    /// <summary>
+    /// Shows "n/max" when the finger is tracked (green = full, yellow = partial),
+    /// or "Lost" in red when no markers are visible for that finger.
+    /// </summary>
+    private static void SetFingerStatus(
+        System.Windows.Controls.TextBlock label,
+        Dictionary<FingerIdentity, MarkerGroup> groups,
+        FingerIdentity identity,
+        Brush green, Brush yellow, Brush red)
+    {
+        if (groups.TryGetValue(identity, out var group))
+        {
+            int visible = group.VisibleCount;
+            int max     = MarkerGroup.MaxMarkerCount(identity);
+            label.Text       = $"{visible}/{max}";
+            label.Foreground = visible >= max ? green : yellow;
+        }
+        else
+        {
+            label.Text       = "Lost";
+            label.Foreground = red;
+        }
     }
 }

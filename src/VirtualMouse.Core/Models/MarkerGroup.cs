@@ -6,15 +6,17 @@ namespace VirtualMouse.Core.Models;
 public enum FingerIdentity
 {
     Unknown,
-    LeftThumb,        // 1 marker
-    LeftIndex,        // 3 markers
-    RightIndex,       // 3 markers
-    RightMiddle       // 3 markers
+    LeftThumb,    // Up to 1 marker
+    LeftIndex,    // Up to 3 markers
+    RightIndex,   // Up to 3 markers
+    RightMiddle   // Up to 3 markers
 }
 
 /// <summary>
 /// Represents a group of blobs that belong to a single finger.
 /// The centroid of the group is used as the canonical position of that finger.
+/// A finger is tracked regardless of how many of its markers are currently
+/// visible — partial visibility (1 or 2 of 3 markers) is fully supported.
 /// </summary>
 public class MarkerGroup
 {
@@ -22,27 +24,45 @@ public class MarkerGroup
     public IReadOnlyList<MarkerBlob> Blobs { get; init; } = [];
 
     /// <summary>
-    /// The average (centroid) position of all blobs in this group.
+    /// Number of markers currently visible for this finger.
+    /// </summary>
+    public int VisibleCount => Blobs.Count;
+
+    /// <summary>
+    /// Maximum number of markers placed on this finger.
+    /// </summary>
+    public int MaxCount => MaxMarkerCount(Identity);
+
+    /// <summary>
+    /// The intensity-weighted centroid position of all visible blobs in this group.
     /// This is the primary tracking coordinate for this finger.
+    /// With more visible markers the centroid is more stable; with fewer it is
+    /// noisier but still valid for tracking.
     /// </summary>
     public (double X, double Y) Centroid
     {
         get
         {
             if (Blobs.Count == 0) return (0, 0);
-            return (Blobs.Average(b => b.X), Blobs.Average(b => b.Y));
+            // Intensity-weighted average: brighter blobs contribute more to the centroid
+            double totalWeight = Blobs.Sum(b => b.MeanIntensity);
+            if (totalWeight <= 0)
+                return (Blobs.Average(b => b.X), Blobs.Average(b => b.Y));
+            double wx = Blobs.Sum(b => b.X * b.MeanIntensity) / totalWeight;
+            double wy = Blobs.Sum(b => b.Y * b.MeanIntensity) / totalWeight;
+            return (wx, wy);
         }
     }
 
     /// <summary>
-    /// Expected number of markers for this finger identity.
+    /// Maximum number of markers placed on a given finger identity.
     /// </summary>
-    public static int ExpectedCount(FingerIdentity identity) => identity switch
+    public static int MaxMarkerCount(FingerIdentity identity) => identity switch
     {
-        FingerIdentity.LeftThumb  => 1,
-        FingerIdentity.LeftIndex  => 3,
-        FingerIdentity.RightIndex => 3,
+        FingerIdentity.LeftThumb   => 1,
+        FingerIdentity.LeftIndex   => 3,
+        FingerIdentity.RightIndex  => 3,
         FingerIdentity.RightMiddle => 3,
-        _ => 0
+        _                          => 0
     };
 }
