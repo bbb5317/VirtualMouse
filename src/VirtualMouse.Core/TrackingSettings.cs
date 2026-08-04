@@ -12,8 +12,7 @@ public class TrackingSettings
     public int FrameHeight       { get; set; } = 800;
     public int TargetFps         { get; set; } = 120;
 
-    // ── Camera Video Proc Amp (from ArduCam OV9281 driver panel) ──────────
-    // These values match the user's configured driver settings.
+    // ── Camera Video Proc Amp ──────────────────────────────────────────────
     public double CamBrightness    { get; set; } = -64;
     public double CamContrast      { get; set; } = 64;
     public double CamSaturation    { get; set; } = 64;
@@ -28,52 +27,42 @@ public class TrackingSettings
     /// <summary>Brightness threshold (0–255) for binary thresholding.</summary>
     public int BrightnessThreshold { get; set; } = 180;
 
-    /// <summary>Minimum blob area in pixels.</summary>
+    /// <summary>Minimum blob area in pixels (noise filter).</summary>
     public double MinBlobArea { get; set; } = 4.0;
 
-    /// <summary>Maximum blob area in pixels.</summary>
+    /// <summary>Maximum blob area in pixels (merged-blob filter).</summary>
     public double MaxBlobArea { get; set; } = 800.0;
 
-    // ── Shape Filter (Rectangular Markers) ────────────────────────────────
+    // ── Two-Speed Pipeline ─────────────────────────────────────────────────
 
     /// <summary>
-    /// Minimum rectangularity score (0–1) for a blob to be accepted as a marker.
-    /// Rectangularity = blob_area / bounding_box_area.
-    /// A filled rectangle scores ~0.9+. A circle scores ~0.78. A ring scores lower.
-    /// The retroreflective tape markers are rectangular strips → high rectangularity.
-    /// Keyboard key characters are irregular glyphs → lower rectangularity.
-    /// Set to 0 to disable this filter.
+    /// How often (in frames) the slow identification pass runs.
+    /// At 120fps: 60 = every 0.5s, 120 = every 1s.
+    /// Lower = faster re-identification but more CPU on the slow pass.
     /// </summary>
-    public double MinRectangularity { get; set; } = 0.55;
+    public int IdentifyInterval { get; set; } = 60;
 
     /// <summary>
-    /// Minimum aspect ratio of the bounding box (longer side / shorter side).
-    /// Rectangular markers are elongated (ratio > 1.5).
-    /// Round keyboard LEDs have ratio ~1.0.
-    /// Set to 1.0 to disable.
+    /// Number of frames to collect before the first identification pass.
+    /// During this period all blobs are shown but no gesture logic runs.
     /// </summary>
-    public double MinAspectRatio { get; set; } = 1.3;
-
-    /// <summary>Maximum aspect ratio (prevents extremely thin noise lines).</summary>
-    public double MaxAspectRatio { get; set; } = 8.0;
-
-    // ── Motion Calibration ─────────────────────────────────────────────────
+    public int IdentifyFrames { get; set; } = 60;
 
     /// <summary>
-    /// Set of pixel positions (as "x,y" strings) that are known static blobs
-    /// learned during the motion-calibration phase. Any blob whose centroid
-    /// is within StaticBlacklistRadiusPx of a blacklisted position is rejected.
+    /// Minimum displacement (pixels) a blob must show between two consecutive
+    /// slow passes to be classified as a marker (moving object).
+    /// Blobs that never move this far are classified as static (keyboard keys).
+    /// Typical value: 6–15px. Set lower if hands move slowly; higher if
+    /// camera vibration causes false positives.
     /// </summary>
-    public List<string> StaticBlacklist { get; set; } = new();
+    public double IdentifyMovementThresholdPx { get; set; } = 8.0;
 
     /// <summary>
-    /// Radius in pixels around a blacklisted position within which a blob
-    /// is considered to be the same static object and is rejected.
+    /// Scale factor for the fast per-frame pass (0.25–1.0).
+    /// 0.5 = half resolution = ~4× faster per-frame processing.
+    /// Centroid is up-scaled back to full-resolution coordinates.
     /// </summary>
-    public double StaticBlacklistRadiusPx { get; set; } = 12.0;
-
-    // ── Background Subtraction ─────────────────────────────────────────────
-    public double BackgroundLearningRate { get; set; } = 0.005;
+    public double FastPassScale { get; set; } = 0.5;
 
     // ── Grouping ───────────────────────────────────────────────────────────
     public double GroupingDistancePixels { get; set; } = 60.0;

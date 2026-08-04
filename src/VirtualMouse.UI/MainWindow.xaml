@@ -1,8 +1,8 @@
 <Window x:Class="VirtualMouse.UI.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Virtual Mouse v0.5 — ArduCam OV9281"
-        Height="900" Width="1200"
+        Title="Virtual Mouse v0.6 — ArduCam OV9281"
+        Height="840" Width="1200"
         Background="{StaticResource BackgroundBrush}"
         Foreground="{StaticResource TextBrush}"
         WindowStartupLocation="CenterScreen">
@@ -10,7 +10,7 @@
     <Grid Margin="10">
         <Grid.ColumnDefinitions>
             <ColumnDefinition Width="*"/>
-            <ColumnDefinition Width="320"/>
+            <ColumnDefinition Width="310"/>
         </Grid.ColumnDefinitions>
 
         <!-- ── Left: Camera Preview ── -->
@@ -30,12 +30,13 @@
                     </Grid.ColumnDefinitions>
                     <TextBlock Text="Camera Preview" FontSize="14" FontWeight="Bold"
                                Foreground="{StaticResource AccentBrush}" VerticalAlignment="Center"/>
-                    <Border x:Name="WarmUpPill" Grid.Column="1"
-                            Background="#885500" CornerRadius="10" Padding="10,4" Margin="0,0,8,0"
-                            Visibility="Collapsed">
-                        <TextBlock x:Name="WarmUpLabel" Text="Stabilising..."
+                    <!-- Identification status pill -->
+                    <Border x:Name="IdentifyPill" Grid.Column="1"
+                            Background="#885500" CornerRadius="10" Padding="10,4" Margin="0,0,8,0">
+                        <TextBlock x:Name="IdentifyLabel" Text="Identifying..."
                                    FontSize="11" Foreground="White"/>
                     </Border>
+                    <!-- Mouse activation pill -->
                     <Border x:Name="ActivationPill" Grid.Column="2"
                             Background="{StaticResource RedBrush}" CornerRadius="10" Padding="12,4">
                         <TextBlock x:Name="ActivationLabel" Text="MOUSE OFF"
@@ -49,9 +50,11 @@
                 <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="10,4,10,8">
                     <TextBlock Text="FPS: "/>
                     <TextBlock x:Name="FpsLabel" Text="--" Foreground="{StaticResource GreenBrush}" Width="40"/>
-                    <TextBlock Text="Blobs: " Margin="20,0,0,0"/>
-                    <TextBlock x:Name="BlobCountLabel" Text="--" Foreground="{StaticResource GreenBrush}" Width="30"/>
-                    <TextBlock Text="Pinch dist: " Margin="20,0,0,0"/>
+                    <TextBlock Text="Markers: " Margin="20,0,0,0"/>
+                    <TextBlock x:Name="MarkerCountLabel" Text="--" Foreground="{StaticResource GreenBrush}" Width="30"/>
+                    <TextBlock Text="Blobs: " Margin="10,0,0,0"/>
+                    <TextBlock x:Name="BlobCountLabel" Text="--" Foreground="#888" Width="30"/>
+                    <TextBlock Text="Pinch: " Margin="20,0,0,0"/>
                     <TextBlock x:Name="PinchDistLabel" Text="--" Foreground="{StaticResource AccentBrush}" Width="55"/>
                     <TextBlock Text="Status: " Margin="20,0,0,0"/>
                     <TextBlock x:Name="StatusLabel" Text="Stopped" Foreground="{StaticResource RedBrush}"/>
@@ -93,66 +96,56 @@
 
                     <Separator Background="#444" Margin="0,12"/>
 
-                    <!-- Motion Calibration -->
-                    <TextBlock Text="Motion Calibration" FontSize="13" FontWeight="Bold"
+                    <!-- Marker Identification -->
+                    <TextBlock Text="Marker Identification" FontSize="13" FontWeight="Bold"
                                Foreground="{StaticResource AccentBrush}" Margin="0,0,0,6"/>
 
                     <TextBlock TextWrapping="Wrap" Foreground="#AAA" FontSize="11" Margin="0,0,0,8">
-Press Start, then click Record. Wave your hands for 3–5 seconds so the
-markers move. Press Stop — static blobs (keyboard keys) are blacklisted
-and will no longer appear as markers.
+The system automatically identifies which blobs are markers by
+tracking which ones move. Move your hands naturally — markers
+are identified within a few seconds and updated continuously.
                     </TextBlock>
 
-                    <Border x:Name="CalibStatusBorder" Background="#1A1A1A"
-                            CornerRadius="4" Padding="8,6" Margin="0,0,0,8">
-                        <TextBlock x:Name="CalibStatusLabel"
-                                   Text="Status: Not calibrated"
-                                   Foreground="#888" FontSize="11" TextWrapping="Wrap"/>
+                    <!-- Live identification status -->
+                    <Border Background="#1A1A1A" CornerRadius="4" Padding="8,6" Margin="0,0,0,8">
+                        <StackPanel>
+                            <TextBlock x:Name="IdentifyStatusLabel"
+                                       Text="Confirmed markers: 0"
+                                       Foreground="#888" FontSize="11"/>
+                            <TextBlock x:Name="IdentifyPassLabel"
+                                       Text="Identification passes: 0"
+                                       Foreground="#666" FontSize="10" Margin="0,2,0,0"/>
+                        </StackPanel>
                     </Border>
 
-                    <Grid Margin="0,0,0,4">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="*"/>
-                        </Grid.ColumnDefinitions>
-                        <Button x:Name="CalibRecordButton" Grid.Column="0"
-                                Content="⏺  Record" Margin="0,0,4,0"
-                                Background="#1A3A6B" Foreground="White" FontWeight="Bold"
-                                Padding="8,6" Click="CalibRecord_Click"/>
-                        <Button x:Name="CalibStopButton" Grid.Column="1"
-                                Content="⏹  Stop &amp; Apply" Margin="4,0,0,0"
-                                Background="#3A1A1A" Foreground="White" FontWeight="Bold"
-                                Padding="8,6" IsEnabled="False" Click="CalibStop_Click"/>
-                    </Grid>
-
-                    <Button Content="✕  Clear Blacklist" Margin="0,4,0,0"
+                    <Button Content="⟳  Re-identify Markers"
                             Background="#3C3C3C" Foreground="{StaticResource TextBrush}"
-                            BorderBrush="#666" Padding="8,5"
-                            Click="CalibClear_Click"
-                            ToolTip="Remove all blacklisted positions and start fresh"/>
+                            BorderBrush="{StaticResource AccentBrush}" Padding="8,6" Margin="0,0,0,4"
+                            Click="ReIdentify_Click"
+                            ToolTip="Reset marker identification and start fresh (e.g. after repositioning camera)"/>
 
-                    <Separator Background="#444" Margin="0,12"/>
-
-                    <!-- Shape Filter -->
-                    <TextBlock Text="Shape Filter" FontSize="13" FontWeight="Bold"
-                               Foreground="{StaticResource AccentBrush}" Margin="0,0,0,6"/>
-
-                    <TextBlock Text="Min Rectangularity:"
-                               ToolTip="Blob area / bounding box area. Rectangular tape ~0.7+. Irregular glyphs lower."/>
+                    <!-- Identification interval -->
+                    <TextBlock Text="Identification Interval (frames):"
+                               ToolTip="How often the slow pass runs. Lower = faster re-ID, more CPU."/>
                     <Grid Margin="0,2,0,8">
                         <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="42"/></Grid.ColumnDefinitions>
-                        <Slider x:Name="RectSlider" Grid.Column="0" Minimum="0.0" Maximum="0.95" Value="0.55"
-                                VerticalAlignment="Center" ValueChanged="RectSlider_ValueChanged"/>
-                        <TextBlock x:Name="RectLabel" Grid.Column="1" Text="0.55" Margin="6,0,0,0" VerticalAlignment="Center"/>
+                        <Slider x:Name="IdentifyIntervalSlider" Grid.Column="0"
+                                Minimum="10" Maximum="120" Value="60"
+                                VerticalAlignment="Center" ValueChanged="IdentifyIntervalSlider_ValueChanged"/>
+                        <TextBlock x:Name="IdentifyIntervalLabel" Grid.Column="1"
+                                   Text="60" Margin="6,0,0,0" VerticalAlignment="Center"/>
                     </Grid>
 
-                    <TextBlock Text="Min Aspect Ratio:"
-                               ToolTip="Longer/shorter side. Rectangular strips > 1.3. Round LEDs ~1.0."/>
+                    <!-- Movement threshold -->
+                    <TextBlock Text="Movement Threshold (px):"
+                               ToolTip="Min displacement to classify a blob as a marker. Lower catches slow-moving markers; higher rejects camera vibration noise."/>
                     <Grid Margin="0,2,0,8">
                         <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="42"/></Grid.ColumnDefinitions>
-                        <Slider x:Name="AspectMinSlider" Grid.Column="0" Minimum="1.0" Maximum="4.0" Value="1.3"
-                                VerticalAlignment="Center" ValueChanged="AspectMinSlider_ValueChanged"/>
-                        <TextBlock x:Name="AspectMinLabel" Grid.Column="1" Text="1.3" Margin="6,0,0,0" VerticalAlignment="Center"/>
+                        <Slider x:Name="MoveThreshSlider" Grid.Column="0"
+                                Minimum="2" Maximum="30" Value="8"
+                                VerticalAlignment="Center" ValueChanged="MoveThreshSlider_ValueChanged"/>
+                        <TextBlock x:Name="MoveThreshLabel" Grid.Column="1"
+                                   Text="8" Margin="6,0,0,0" VerticalAlignment="Center"/>
                     </Grid>
 
                     <Separator Background="#444" Margin="0,8"/>
@@ -182,7 +175,7 @@ Spread left thumb + index to the ON position, then press Calibrate.
 
                     <Separator Background="#444" Margin="0,12"/>
 
-                    <!-- Calibration Sliders -->
+                    <!-- Calibration -->
                     <TextBlock Text="Calibration" FontSize="13" FontWeight="Bold"
                                Foreground="{StaticResource AccentBrush}" Margin="0,0,0,8"/>
 
@@ -237,7 +230,7 @@ Spread left thumb + index to the ON position, then press Calibrate.
 
                     <Separator Background="#444" Margin="0,12"/>
                     <TextBlock x:Name="SettingsPathLabel" FontSize="9" Foreground="#555" TextWrapping="Wrap" Margin="0,0,0,4"/>
-                    <TextBlock Text="v0.5.0 — Proof of Concept" FontSize="10" Foreground="#666" HorizontalAlignment="Center"/>
+                    <TextBlock Text="v0.6.0 — Proof of Concept" FontSize="10" Foreground="#666" HorizontalAlignment="Center"/>
                 </StackPanel>
             </ScrollViewer>
         </Border>

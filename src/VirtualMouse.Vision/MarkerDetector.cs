@@ -6,22 +6,29 @@ using Microsoft.Extensions.Logging;
 namespace VirtualMouse.Vision;
 
 /// <summary>
-/// Detects retroreflective marker blobs using a three-layer pipeline:
+/// Two-speed detection pipeline:
 ///
-///   Layer 1 — Brightness threshold:
-///     Binary threshold isolates all bright blobs in the frame.
+///   SLOW PASS — runs every N frames (default every 60 frames, ~0.5s at 120fps)
+///   ─────────────────────────────────────────────────────────────────────────
+///   Scans the full-resolution frame for ALL bright blobs above threshold.
+///   For each blob, tracks how far its centroid has moved since the last slow pass.
+///   A blob that has moved more than IdentifyMovementThresholdPx is a MARKER.
+///   A blob that has not moved is STATIC (keyboard key, reflection) and ignored.
+///   The set of identified marker positions is updated atomically.
+///   This runs on the capture thread but does minimal work (no gesture logic).
 ///
-///   Layer 2 — Rectangular shape filter:
-///     The retroreflective tape markers are rectangular strips.
-///     Keyboard key characters are irregular glyphs; round LEDs are circular.
-///     Filter by: rectangularity (blob area / bounding box area) and aspect ratio.
+///   FAST PASS — runs on every frame
+///   ─────────────────────────────────────────────────────────────────────────
+///   Downscales the frame to FastPassScale (default 0.5 = half resolution).
+///   Searches only in a small window around each known marker position.
+///   Returns the refined centroid of each marker at sub-pixel accuracy.
+///   This is the only pass that feeds into gesture recognition.
 ///
-///   Layer 3 — Static blacklist (motion calibration):
-///     During a calibration phase the user waves their hands. Any blob that
-///     moves more than a threshold distance is registered as a marker candidate.
-///     Any blob that never moves is added to a static blacklist and rejected
-///     in all subsequent frames. This permanently removes keyboard keys,
-///     desk reflections, and other static bright objects.
+///   NET RESULT:
+///   - Static keyboard keys are automatically excluded without any user action.
+///   - The system self-corrects every N frames as hands move around.
+///   - Per-frame CPU load is proportional to the number of markers (≤10),
+///     not the number of all bright blobs in the frame.
 /// </summary>
 public class MarkerDetector : IDisposable
 {
@@ -29,204 +36,188 @@ public class MarkerDetector : IDisposable
     private readonly TrackingSettings _settings;
 
     // Reusable Mats
-    private readonly Mat _grayFrame   = new();
-    private readonly Mat _threshFrame = new();
+    private readonly Mat _grayFull  = new();
+    private readonly Mat _threshFull = new();
+    private readonly Mat _graySmall = new();
 
-    // ── Motion Calibration State ───────────────────────────────────────────
+    // ── Slow pass state ────────────────────────────────────────────────────
 
-    public enum CalibrationState { Idle, Recording, Complete }
-    public CalibrationState State { get; private set; } = CalibrationState.Idle;
-
-    // During recording: track each blob's max displacement from its first seen position
-    // Key = "x,y" of first-seen centroid (rounded), Value = max displacement seen
-    private readonly Dictionary<string, double> _blobMaxDisplacement = new();
-    // All centroids seen in the current recording frame
-    private readonly List<(double X, double Y)> _prevCalibCentroids = new();
-
-    // Blacklist loaded from settings (static blobs to always reject)
-    private List<(double X, double Y)> _blacklist = new();
-
-    // Warm-up: suppress output for the first N frames so AGC can stabilise
     private int _framesSeen;
-    private const int WarmUpFrames = 30;
-    public bool IsWarmedUp => _framesSeen >= WarmUpFrames;
+
+    // Previous slow-pass blob centroids: used to measure displacement
+    private List<(double X, double Y)> _prevSlowBlobs = new();
+
+    // Displacement accumulator: key = grid-snapped "x,y", value = max displacement seen
+    private readonly Dictionary<string, double> _blobDisplacement = new();
+
+    // The current set of confirmed marker positions (updated atomically)
+    // Each entry is the centroid from the last slow pass.
+    private volatile MarkerPosition[] _confirmedMarkers = Array.Empty<MarkerPosition>();
+
+    // How many slow passes have completed (for UI feedback)
+    public int SlowPassCount { get; private set; }
+    public int ConfirmedMarkerCount => _confirmedMarkers.Length;
+
+    // ── Fast pass state ────────────────────────────────────────────────────
+
+    private const int FastWindowRadius = 30; // px in full-res coords to search around each marker
+
+    // ── Public state ───────────────────────────────────────────────────────
+
+    public bool IsIdentifying => _framesSeen < _settings.IdentifyFrames;
+
+    // ── Constructor ────────────────────────────────────────────────────────
 
     public MarkerDetector(ILogger<MarkerDetector> logger, TrackingSettings settings)
     {
         _logger = logger;
         _settings = settings;
-        LoadBlacklist();
     }
 
-    private void LoadBlacklist()
+    /// <summary>Resets the identification state so the slow pass re-learns from scratch.</summary>
+    public void ResetIdentification()
     {
-        _blacklist = _settings.StaticBlacklist
-            .Select(s => s.Split(','))
-            .Where(p => p.Length == 2)
-            .Select(p => (double.Parse(p[0]), double.Parse(p[1])))
-            .ToList();
-        _logger.LogInformation("Loaded {Count} blacklisted positions.", _blacklist.Count);
+        _prevSlowBlobs.Clear();
+        _blobDisplacement.Clear();
+        _confirmedMarkers = Array.Empty<MarkerPosition>();
+        _framesSeen = 0;
+        SlowPassCount = 0;
+        _logger.LogInformation("Marker identification reset.");
     }
 
-    // ── Calibration Control ────────────────────────────────────────────────
-
-    /// <summary>Start recording blob positions for motion calibration.</summary>
-    public void StartCalibration()
-    {
-        _blobMaxDisplacement.Clear();
-        _prevCalibCentroids.Clear();
-        State = CalibrationState.Recording;
-        _logger.LogInformation("Motion calibration started — wave your hands.");
-    }
-
-    /// <summary>
-    /// Stop recording and build the static blacklist.
-    /// Any blob that never moved more than MinMovementPx is static → blacklisted.
-    /// </summary>
-    public void StopCalibration(double minMovementPx = 8.0)
-    {
-        var newBlacklist = new List<string>();
-        foreach (var (key, maxDisp) in _blobMaxDisplacement)
-        {
-            if (maxDisp < minMovementPx)
-                newBlacklist.Add(key);
-        }
-
-        _settings.StaticBlacklist = newBlacklist;
-        LoadBlacklist();
-        State = CalibrationState.Complete;
-        _logger.LogInformation(
-            "Calibration complete. {Static} static blobs blacklisted, {Moving} moving blobs kept.",
-            newBlacklist.Count,
-            _blobMaxDisplacement.Count - newBlacklist.Count);
-    }
-
-    public void ClearBlacklist()
-    {
-        _settings.StaticBlacklist.Clear();
-        _blacklist.Clear();
-        State = CalibrationState.Idle;
-        _logger.LogInformation("Static blacklist cleared.");
-    }
-
-    // ── Main Detection ─────────────────────────────────────────────────────
+    // ── Main entry point ───────────────────────────────────────────────────
 
     public IReadOnlyList<MarkerBlob> Detect(Mat frame)
     {
         _framesSeen++;
 
-        // Step 1: Grayscale
+        // Step 1: Grayscale (full resolution)
         if (frame.Channels() == 3)
-            Cv2.CvtColor(frame, _grayFrame, ColorConversionCodes.BGR2GRAY);
+            Cv2.CvtColor(frame, _grayFull, ColorConversionCodes.BGR2GRAY);
         else
-            frame.CopyTo(_grayFrame);
+            frame.CopyTo(_grayFull);
 
-        // Step 2: Binary threshold — isolate all bright blobs
-        Cv2.Threshold(_grayFrame, _threshFrame,
+        // Step 2: Slow pass — runs every IdentifyInterval frames
+        if (_framesSeen % _settings.IdentifyInterval == 0)
+            RunSlowPass();
+
+        // Step 3: Fast pass — runs every frame using confirmed marker positions
+        return RunFastPass(frame);
+    }
+
+    // ── Slow Pass ──────────────────────────────────────────────────────────
+
+    private void RunSlowPass()
+    {
+        // Threshold the full-res frame to find ALL bright blobs
+        Cv2.Threshold(_grayFull, _threshFull,
             _settings.BrightnessThreshold, 255, ThresholdTypes.Binary);
 
-        // Step 3: Connected components
         using var labels    = new Mat();
         using var stats     = new Mat();
         using var centroids = new Mat();
-        int numLabels = Cv2.ConnectedComponentsWithStats(
-            _threshFrame, labels, stats, centroids,
+        int n = Cv2.ConnectedComponentsWithStats(
+            _threshFull, labels, stats, centroids,
             PixelConnectivity.Connectivity8, MatType.CV_32S);
 
-        var candidates = new List<MarkerBlob>();
+        var currentBlobs = new List<(double X, double Y)>();
 
-        for (int label = 1; label < numLabels; label++)
+        for (int lbl = 1; lbl < n; lbl++)
         {
-            double area = stats.At<int>(label, (int)ConnectedComponentsTypes.Area);
+            double area = stats.At<int>(lbl, (int)ConnectedComponentsTypes.Area);
             if (area < _settings.MinBlobArea || area > _settings.MaxBlobArea) continue;
 
-            int bx = stats.At<int>(label, (int)ConnectedComponentsTypes.Left);
-            int by = stats.At<int>(label, (int)ConnectedComponentsTypes.Top);
-            int bw = stats.At<int>(label, (int)ConnectedComponentsTypes.Width);
-            int bh = stats.At<int>(label, (int)ConnectedComponentsTypes.Height);
-            if (bw <= 0 || bh <= 0) continue;
+            double cx = centroids.At<double>(lbl, 0);
+            double cy = centroids.At<double>(lbl, 1);
+            currentBlobs.Add((cx, cy));
 
-            // ── Layer 2: Rectangular shape filter ─────────────────────────
+            // Grid-snap to 8px for stable key
+            string key = $"{(int)(cx / 8) * 8},{(int)(cy / 8) * 8}";
 
-            // Rectangularity: how much of the bounding box is filled
-            double rectangularity = area / (double)(bw * bh);
-            if (rectangularity < _settings.MinRectangularity) continue;
+            if (!_blobDisplacement.ContainsKey(key))
+                _blobDisplacement[key] = 0;
 
-            // Aspect ratio: longer side / shorter side
-            double aspectRatio = bw >= bh
-                ? (double)bw / bh
-                : (double)bh / bw;
-            if (aspectRatio < _settings.MinAspectRatio || aspectRatio > _settings.MaxAspectRatio) continue;
+            // Measure displacement from closest previous blob
+            if (_prevSlowBlobs.Count > 0)
+            {
+                double minDist = _prevSlowBlobs
+                    .Select(p => Math.Sqrt(Math.Pow(cx - p.X, 2) + Math.Pow(cy - p.Y, 2)))
+                    .Min();
+                if (minDist > _blobDisplacement[key])
+                    _blobDisplacement[key] = minDist;
+            }
+        }
 
-            // ── Sub-pixel centroid via intensity-weighted moments ──────────
+        _prevSlowBlobs = currentBlobs;
+
+        // Promote blobs that have moved enough to confirmed markers
+        var confirmed = new List<MarkerPosition>();
+        foreach (var (key, disp) in _blobDisplacement)
+        {
+            if (disp >= _settings.IdentifyMovementThresholdPx)
+            {
+                var parts = key.Split(',');
+                confirmed.Add(new MarkerPosition(double.Parse(parts[0]), double.Parse(parts[1])));
+            }
+        }
+
+        _confirmedMarkers = confirmed.ToArray();
+        SlowPassCount++;
+
+        _logger.LogDebug(
+            "Slow pass #{P}: {Total} blobs, {Confirmed} confirmed markers.",
+            SlowPassCount, currentBlobs.Count, confirmed.Count);
+    }
+
+    // ── Fast Pass ──────────────────────────────────────────────────────────
+
+    private IReadOnlyList<MarkerBlob> RunFastPass(Mat frame)
+    {
+        var markers = _confirmedMarkers; // snapshot (atomic reference read)
+        if (markers.Length == 0)
+            return Array.Empty<MarkerBlob>();
+
+        // Downscale for speed
+        double scale = _settings.FastPassScale;
+        int sw = (int)(frame.Width  * scale);
+        int sh = (int)(frame.Height * scale);
+        Cv2.Resize(_grayFull, _graySmall, new OpenCvSharp.Size(sw, sh), interpolation: InterpolationFlags.Area);
+
+        var blobs = new List<MarkerBlob>(markers.Length);
+
+        foreach (var marker in markers)
+        {
+            // Search window around the known marker position (scaled)
+            int cx = (int)(marker.X * scale);
+            int cy = (int)(marker.Y * scale);
+            int r  = (int)(FastWindowRadius * scale);
+
             var roi = new Rect(
-                Math.Max(0, bx), Math.Max(0, by),
-                Math.Min(bw, frame.Width  - bx),
-                Math.Min(bh, frame.Height - by));
+                Math.Max(0, cx - r), Math.Max(0, cy - r),
+                Math.Min(2 * r, sw - Math.Max(0, cx - r)),
+                Math.Min(2 * r, sh - Math.Max(0, cy - r)));
             if (roi.Width <= 0 || roi.Height <= 0) continue;
 
-            using var roiGray   = new Mat(_grayFrame,   roi);
-            using var roiThresh = new Mat(_threshFrame, roi);
-            using var masked    = new Mat();
-            Cv2.BitwiseAnd(roiGray, roiThresh, masked);
-            var moments = Cv2.Moments(masked, binaryImage: false);
+            using var roiGray = new Mat(_graySmall, roi);
+            using var roiThresh = new Mat();
+            Cv2.Threshold(roiGray, roiThresh, _settings.BrightnessThreshold, 255, ThresholdTypes.Binary);
 
-            double subX = moments.M00 > 0 ? bx + moments.M10 / moments.M00 : centroids.At<double>(label, 0);
-            double subY = moments.M00 > 0 ? by + moments.M01 / moments.M00 : centroids.At<double>(label, 1);
+            var moments = Cv2.Moments(roiThresh, binaryImage: false);
+            if (moments.M00 <= 0) continue;
 
-            // ── Layer 3: Static blacklist check ───────────────────────────
-            if (IsBlacklisted(subX, subY)) continue;
+            // Sub-pixel centroid in full-resolution coordinates
+            double subX = (roi.X + moments.M10 / moments.M00) / scale;
+            double subY = (roi.Y + moments.M01 / moments.M00) / scale;
 
-            candidates.Add(new MarkerBlob
+            blobs.Add(new MarkerBlob
             {
                 X = subX, Y = subY,
-                Area = area,
+                Area = moments.M00 / (scale * scale),
                 MeanIntensity = Cv2.Mean(roiGray, roiThresh).Val0
             });
         }
 
-        // ── Update calibration recording ───────────────────────────────────
-        if (State == CalibrationState.Recording)
-            UpdateCalibration(candidates);
-
-        return candidates;
-    }
-
-    // ── Calibration Tracking ───────────────────────────────────────────────
-
-    private void UpdateCalibration(List<MarkerBlob> blobs)
-    {
-        foreach (var blob in blobs)
-        {
-            // Round to nearest 5px for stable key generation
-            string key = $"{Math.Round(blob.X / 5) * 5},{Math.Round(blob.Y / 5) * 5}";
-
-            if (!_blobMaxDisplacement.ContainsKey(key))
-                _blobMaxDisplacement[key] = 0;
-
-            // Find closest previous centroid and measure displacement
-            double maxDisp = _blobMaxDisplacement[key];
-            foreach (var prev in _prevCalibCentroids)
-            {
-                double dist = Math.Sqrt(Math.Pow(blob.X - prev.X, 2) + Math.Pow(blob.Y - prev.Y, 2));
-                if (dist > maxDisp) maxDisp = dist;
-            }
-            _blobMaxDisplacement[key] = maxDisp;
-        }
-
-        _prevCalibCentroids.Clear();
-        _prevCalibCentroids.AddRange(blobs.Select(b => (b.X, b.Y)));
-    }
-
-    private bool IsBlacklisted(double x, double y)
-    {
-        double r = _settings.StaticBlacklistRadiusPx;
-        foreach (var (bx, by) in _blacklist)
-        {
-            if (Math.Abs(x - bx) < r && Math.Abs(y - by) < r)
-                return true;
-        }
-        return false;
+        return blobs;
     }
 
     // ── Debug Visualisation ────────────────────────────────────────────────
@@ -237,31 +228,41 @@ public class MarkerDetector : IDisposable
         if (debug.Channels() == 1)
             Cv2.CvtColor(debug, debug, ColorConversionCodes.GRAY2BGR);
 
-        if (!IsWarmedUp)
+        string status = IsIdentifying
+            ? $"Identifying markers... (move your hands)"
+            : $"Tracking {ConfirmedMarkerCount} markers";
+        var colour = IsIdentifying ? new Scalar(0, 140, 255) : new Scalar(0, 220, 0);
+        Cv2.PutText(debug, status, new Point(10, 28),
+            HersheyFonts.HersheySimplex, 0.65, colour, 2);
+
+        // Draw confirmed marker search windows (orange)
+        foreach (var m in _confirmedMarkers)
         {
-            Cv2.PutText(debug, $"Stabilising... ({WarmUpFrames - _framesSeen} frames)",
-                new Point(10, 30), HersheyFonts.HersheySimplex, 0.6, new Scalar(0, 165, 255), 2);
-        }
-        else if (State == CalibrationState.Recording)
-        {
-            Cv2.PutText(debug, "CALIBRATING — wave your hands!",
-                new Point(10, 30), HersheyFonts.HersheySimplex, 0.7, new Scalar(0, 80, 255), 2);
+            Cv2.Rectangle(debug,
+                new Point((int)(m.X - FastWindowRadius), (int)(m.Y - FastWindowRadius)),
+                new Point((int)(m.X + FastWindowRadius), (int)(m.Y + FastWindowRadius)),
+                new Scalar(0, 140, 255), 1);
         }
 
+        // Draw detected blobs (green)
         foreach (var blob in blobs)
         {
             var c = new Point((int)blob.X, (int)blob.Y);
             Cv2.Circle(debug, c, 8, Scalar.Green, 2);
             Cv2.Circle(debug, c, 2, Scalar.Red, -1);
-            Cv2.PutText(debug, $"({blob.X:F0},{blob.Y:F0})",
-                new Point(c.X + 10, c.Y), HersheyFonts.HersheySimplex, 0.35, Scalar.Yellow, 1);
         }
+
         return debug;
     }
 
     public void Dispose()
     {
-        _grayFrame.Dispose();
-        _threshFrame.Dispose();
+        _grayFull.Dispose();
+        _threshFull.Dispose();
+        _graySmall.Dispose();
     }
+
+    // ── Inner types ────────────────────────────────────────────────────────
+
+    private record MarkerPosition(double X, double Y);
 }

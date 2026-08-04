@@ -52,7 +52,6 @@ public partial class MainWindow : System.Windows.Window
         SettingsPathLabel.Text = $"Settings: {SettingsService.GetSettingsPath()}";
         RefreshCameraList();
         ApplySettingsToUI();
-        UpdateCalibStatusLabel();
     }
 
     // ── Camera ─────────────────────────────────────────────────────────────
@@ -103,6 +102,7 @@ public partial class MainWindow : System.Windows.Window
             return;
         }
 
+        _detector.ResetIdentification();
         _cts = new CancellationTokenSource();
         _camera.FrameReady += OnFrameReady;
         _camera.StartCapture(_cts.Token);
@@ -110,19 +110,15 @@ public partial class MainWindow : System.Windows.Window
         StartButton.IsEnabled = false;
         StopButton.IsEnabled = true;
         CameraComboBox.IsEnabled = false;
-        CalibRecordButton.IsEnabled = true;
         StatusLabel.Text = "Running";
         StatusLabel.Foreground = (Brush)FindResource("GreenBrush");
-        WarmUpPill.Visibility = Visibility.Visible;
+        IdentifyPill.Visibility = Visibility.Visible;
     }
 
     private void StopButton_Click(object sender, RoutedEventArgs e) => StopTracking();
 
     private void StopTracking()
     {
-        if (_detector.State == MarkerDetector.CalibrationState.Recording)
-            _detector.StopCalibration();
-
         _cts?.Cancel();
         _camera.FrameReady -= OnFrameReady;
         _camera.Stop();
@@ -134,12 +130,10 @@ public partial class MainWindow : System.Windows.Window
             StartButton.IsEnabled = true;
             StopButton.IsEnabled = false;
             CameraComboBox.IsEnabled = true;
-            CalibRecordButton.IsEnabled = false;
-            CalibStopButton.IsEnabled = false;
             StatusLabel.Text = "Stopped";
             StatusLabel.Foreground = (Brush)FindResource("RedBrush");
             UpdateActivationPill(false);
-            WarmUpPill.Visibility = Visibility.Collapsed;
+            IdentifyPill.Visibility = Visibility.Collapsed;
         });
     }
 
@@ -152,7 +146,8 @@ public partial class MainWindow : System.Windows.Window
             var blobs   = _detector.Detect(frame);
             var groups  = _grouper.Group(blobs);
 
-            if (_detector.IsWarmedUp && _detector.State != MarkerDetector.CalibrationState.Recording)
+            // Only inject mouse events once identification has settled
+            if (!_detector.IsIdentifying)
             {
                 var gesture = _gestureRecognizer.Process(groups);
                 _mouseController.Apply(gesture);
@@ -169,86 +164,38 @@ public partial class MainWindow : System.Windows.Window
                 var bitmap = MatToBitmapSource(debugFrame);
                 bitmap.Freeze();
 
-                var groupDict  = groups.ToDictionary(g => g.Identity);
+                var groupDict    = groups.ToDictionary(g => g.Identity);
                 double pinchDist = _gestureRecognizer.LastActivationDistance;
                 bool mouseActive = _gestureRecognizer.IsMouseActive;
-                bool warmedUp    = _detector.IsWarmedUp;
-                var calibState   = _detector.State;
+                bool identifying = _detector.IsIdentifying;
+                int confirmed    = _detector.ConfirmedMarkerCount;
+                int passes       = _detector.SlowPassCount;
 
                 Dispatcher.InvokeAsync(() =>
                 {
                     CameraPreviewImage.Source = bitmap;
                     FpsLabel.Text = $"{fps:F0}";
                     BlobCountLabel.Text = $"{blobs.Count}";
+                    MarkerCountLabel.Text = $"{confirmed}";
                     PinchDistLabel.Text = pinchDist > 0 ? $"{pinchDist:F0}px" : "--";
                     CalibDistLabel.Text = pinchDist > 0 ? $"{pinchDist:F0} px" : "-- px";
                     UpdateActivationPill(mouseActive);
-                    WarmUpPill.Visibility = warmedUp ? Visibility.Collapsed : Visibility.Visible;
+                    UpdateIdentifyPill(identifying, confirmed);
+                    IdentifyStatusLabel.Text = $"Confirmed markers: {confirmed}";
+                    IdentifyPassLabel.Text   = $"Identification passes: {passes}";
                     UpdateFingerStatus(groupDict);
-                    UpdateCalibPillFromState(calibState);
                 });
             }
         }
     }
 
-    // ── Motion Calibration ─────────────────────────────────────────────────
+    // ── Re-identify ────────────────────────────────────────────────────────
 
-    private void CalibRecord_Click(object sender, RoutedEventArgs e)
+    private void ReIdentify_Click(object sender, RoutedEventArgs e)
     {
-        if (!_detector.IsWarmedUp)
-        {
-            MessageBox.Show("Please wait for the camera to stabilise before calibrating.",
-                "Not Ready", MessageBoxButton.OK, MessageBoxImage.Warning);
-            return;
-        }
-        _detector.StartCalibration();
-        CalibRecordButton.IsEnabled = false;
-        CalibStopButton.IsEnabled = true;
-        CalibStatusLabel.Text = "Status: Recording — wave your hands now!";
-        CalibStatusLabel.Foreground = new SolidColorBrush(Color.FromRgb(255, 120, 0));
-        CalibStatusBorder.Background = new SolidColorBrush(Color.FromRgb(40, 20, 0));
-    }
-
-    private void CalibStop_Click(object sender, RoutedEventArgs e)
-    {
-        _detector.StopCalibration(minMovementPx: 8.0);
-        _settingsService.Save(_settings);
-        CalibRecordButton.IsEnabled = true;
-        CalibStopButton.IsEnabled = false;
-        UpdateCalibStatusLabel();
-    }
-
-    private void CalibClear_Click(object sender, RoutedEventArgs e)
-    {
-        _detector.ClearBlacklist();
-        _settings.StaticBlacklist.Clear();
-        _settingsService.Save(_settings);
-        UpdateCalibStatusLabel();
-    }
-
-    private void UpdateCalibStatusLabel()
-    {
-        int count = _settings.StaticBlacklist.Count;
-        if (count == 0)
-        {
-            CalibStatusLabel.Text = "Status: Not calibrated — all blobs shown";
-            CalibStatusLabel.Foreground = new SolidColorBrush(Color.FromRgb(136, 136, 136));
-            CalibStatusBorder.Background = new SolidColorBrush(Color.FromRgb(26, 26, 26));
-        }
-        else
-        {
-            CalibStatusLabel.Text = $"Status: {count} static positions blacklisted";
-            CalibStatusLabel.Foreground = (Brush)FindResource("GreenBrush");
-            CalibStatusBorder.Background = new SolidColorBrush(Color.FromRgb(0, 30, 10));
-        }
-    }
-
-    private void UpdateCalibPillFromState(MarkerDetector.CalibrationState state)
-    {
-        if (state == MarkerDetector.CalibrationState.Recording)
-        {
-            CalibStatusLabel.Text = $"Status: Recording — wave your hands!";
-        }
+        _detector.ResetIdentification();
+        _gestureRecognizer.Reset();
+        IdentifyPill.Visibility = Visibility.Visible;
     }
 
     // ── Activation Calibration ─────────────────────────────────────────────
@@ -279,17 +226,17 @@ public partial class MainWindow : System.Windows.Window
         _loadingSettings = true;
         try
         {
-            ThresholdSlider.Value   = _settings.BrightnessThreshold;
-            SensitivitySlider.Value = _settings.MouseSensitivity;
-            HysteresisSlider.Value  = _settings.ActivationHysteresisPixels;
-            RectSlider.Value        = _settings.MinRectangularity;
-            AspectMinSlider.Value   = _settings.MinAspectRatio;
+            ThresholdSlider.Value         = _settings.BrightnessThreshold;
+            SensitivitySlider.Value       = _settings.MouseSensitivity;
+            HysteresisSlider.Value        = _settings.ActivationHysteresisPixels;
+            IdentifyIntervalSlider.Value  = _settings.IdentifyInterval;
+            MoveThreshSlider.Value        = _settings.IdentifyMovementThresholdPx;
 
-            ThresholdLabel.Text   = $"{_settings.BrightnessThreshold}";
-            SensitivityLabel.Text = $"{_settings.MouseSensitivity:F1}";
-            HysteresisLabel.Text  = $"{(int)_settings.ActivationHysteresisPixels}";
-            RectLabel.Text        = $"{_settings.MinRectangularity:F2}";
-            AspectMinLabel.Text   = $"{_settings.MinAspectRatio:F1}";
+            ThresholdLabel.Text        = $"{_settings.BrightnessThreshold}";
+            SensitivityLabel.Text      = $"{_settings.MouseSensitivity:F1}";
+            HysteresisLabel.Text       = $"{(int)_settings.ActivationHysteresisPixels}";
+            IdentifyIntervalLabel.Text = $"{_settings.IdentifyInterval}";
+            MoveThreshLabel.Text       = $"{_settings.IdentifyMovementThresholdPx:F0}";
 
             CalibThreshLabel.Text = _settings.ActivationThresholdPixels > 0
                 ? $"{_settings.ActivationThresholdPixels:F0} px"
@@ -307,10 +254,10 @@ public partial class MainWindow : System.Windows.Window
 
         _settingsService.Reset();
         _settings = new TrackingSettings();
-        _detector.ClearBlacklist();
+        _detector.ResetIdentification();
+        _gestureRecognizer.Reset();
         ApplySettingsToUI();
         RefreshCameraList();
-        UpdateCalibStatusLabel();
         CalibThreshLabel.Text = "Not set";
     }
 
@@ -340,19 +287,19 @@ public partial class MainWindow : System.Windows.Window
         _settingsService.Save(_settings);
     }
 
-    private void RectSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    private void IdentifyIntervalSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
     {
         if (_settings == null || _loadingSettings) return;
-        _settings.MinRectangularity = e.NewValue;
-        if (RectLabel != null) RectLabel.Text = $"{e.NewValue:F2}";
+        _settings.IdentifyInterval = (int)e.NewValue;
+        if (IdentifyIntervalLabel != null) IdentifyIntervalLabel.Text = $"{(int)e.NewValue}";
         _settingsService.Save(_settings);
     }
 
-    private void AspectMinSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    private void MoveThreshSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
     {
         if (_settings == null || _loadingSettings) return;
-        _settings.MinAspectRatio = e.NewValue;
-        if (AspectMinLabel != null) AspectMinLabel.Text = $"{e.NewValue:F1}";
+        _settings.IdentifyMovementThresholdPx = e.NewValue;
+        if (MoveThreshLabel != null) MoveThreshLabel.Text = $"{e.NewValue:F0}";
         _settingsService.Save(_settings);
     }
 
@@ -364,6 +311,22 @@ public partial class MainWindow : System.Windows.Window
             ? (Brush)FindResource("GreenBrush")
             : (Brush)FindResource("RedBrush");
         ActivationLabel.Text = active ? "MOUSE ON" : "MOUSE OFF";
+    }
+
+    private void UpdateIdentifyPill(bool identifying, int confirmed)
+    {
+        if (identifying)
+        {
+            IdentifyPill.Background = new SolidColorBrush(Color.FromRgb(136, 85, 0));
+            IdentifyLabel.Text = "Identifying...";
+            IdentifyPill.Visibility = Visibility.Visible;
+        }
+        else
+        {
+            IdentifyPill.Background = (Brush)FindResource("GreenBrush");
+            IdentifyLabel.Text = $"{confirmed} markers";
+            IdentifyPill.Visibility = Visibility.Visible;
+        }
     }
 
     private void UpdateFingerStatus(Dictionary<FingerIdentity, MarkerGroup> groups)
