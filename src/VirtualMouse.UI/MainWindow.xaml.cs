@@ -30,7 +30,7 @@ public partial class MainWindow : System.Windows.Window
         _cameraEnumerator = cameraEnumerator;
         _settings = settings;
         InitializeComponent();
-        Closing += (_, _) => StopCamera();
+        Closing += (_, _) => StopButton_Click(this, new RoutedEventArgs());
         RefreshCameraList();
     }
 
