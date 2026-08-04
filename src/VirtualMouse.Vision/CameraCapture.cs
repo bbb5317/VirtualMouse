@@ -78,16 +78,17 @@ public sealed class CameraCapture : IDisposable
         {
             if (_capture == null || !_capture.IsOpened()) break;
 
-            // Drain queued frames with Grab() (no pixel decode — very fast)
-            bool grabbed = false;
+            // Drain the MSMF buffer: call Grab() repeatedly until it returns false
+            // (buffer empty). Each Grab() call is cheap — no pixel decode.
+            // We count how many frames we grabbed; if zero, the camera hasn't
+            // produced a new frame yet so we yield for 1ms and try again.
+            int grabCount = 0;
             while (_capture.Grab())
-            {
-                grabbed = true;
-                if (!_capture.Grab()) break;
-            }
-            if (!grabbed) { Thread.Sleep(1); continue; }
+                grabCount++;
 
-            // Decode only the latest grabbed frame
+            if (grabCount == 0) { Thread.Sleep(1); continue; }
+
+            // Retrieve the last grabbed frame (the most recent one)
             if (!_capture.Retrieve(frame) || frame.Empty()) continue;
 
             FrameReady?.Invoke(this, frame.Clone());
