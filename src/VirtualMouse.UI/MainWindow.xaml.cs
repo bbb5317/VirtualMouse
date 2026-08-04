@@ -71,7 +71,7 @@ public partial class MainWindow : System.Windows.Window
         _mouseController = mouseController;
 
         InitializeComponent();
-        Closing += (_, _) => CloseCamera();
+        Closing += (_, _) => CloseCamera_Click(this, new RoutedEventArgs());
         RefreshCameraList();
         SetStage(0);
     }
