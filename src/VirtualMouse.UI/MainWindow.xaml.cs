@@ -105,11 +105,15 @@ public partial class MainWindow : System.Windows.Window
     {
         _activeStage = stage;
         StageDescLabel.Text = StageDescriptions[stage];
+        var selectedBg   = new SolidColorBrush(Color.FromRgb(21, 101, 192));  // #1565C0 blue
+        var unselectedBg = new SolidColorBrush(Color.FromRgb(60, 60, 60));    // #3C3C3C dark
+        var selectedFg   = new SolidColorBrush(Colors.White);
+        var unselectedFg = new SolidColorBrush(Color.FromRgb(204, 204, 204)); // #CCCCCC light grey
         foreach (var (btn, i) in new[] {
             (S0Btn,0),(S1Btn,1),(S2Btn,2),(S3Btn,3),(S4Btn,4),(S5Btn,5) })
         {
-            btn.Background = new SolidColorBrush(
-                i == stage ? Color.FromRgb(26,90,160) : Color.FromRgb(60,60,60));
+            btn.Background = i == stage ? selectedBg   : unselectedBg;
+            btn.Foreground = i == stage ? selectedFg   : unselectedFg;
         }
     }
 

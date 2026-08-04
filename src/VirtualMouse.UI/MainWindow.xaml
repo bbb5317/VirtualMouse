@@ -3,13 +3,33 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Virtual Mouse — Staged Diagnostic"
         Height="780" Width="1200"
-        Background="#1E1E1E" Foreground="White"
+        Background="#1E1E1E" Foreground="#E0E0E0"
         WindowStartupLocation="CenterScreen">
+
+    <Window.Resources>
+        <!-- ComboBox style: white text on dark background, readable dropdown -->
+        <Style TargetType="ComboBox">
+            <Setter Property="Background" Value="#3C3C3C"/>
+            <Setter Property="Foreground" Value="#E0E0E0"/>
+            <Setter Property="BorderBrush" Value="#555"/>
+            <Setter Property="Padding" Value="6,4"/>
+        </Style>
+        <Style TargetType="ComboBoxItem">
+            <Setter Property="Background" Value="#3C3C3C"/>
+            <Setter Property="Foreground" Value="#E0E0E0"/>
+        </Style>
+        <!-- Default button style -->
+        <Style TargetType="Button">
+            <Setter Property="Foreground" Value="#E0E0E0"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Cursor" Value="Hand"/>
+        </Style>
+    </Window.Resources>
 
     <Grid Margin="10">
         <Grid.ColumnDefinitions>
             <ColumnDefinition Width="*"/>
-            <ColumnDefinition Width="290"/>
+            <ColumnDefinition Width="300"/>
         </Grid.ColumnDefinitions>
 
         <!-- Camera preview -->
@@ -25,7 +45,7 @@
                         <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
-                    <TextBlock Text="Camera Preview" Foreground="#1E90FF"
+                    <TextBlock Text="Camera Preview" Foreground="#4DA6FF"
                                FontSize="13" FontWeight="Bold" VerticalAlignment="Center"/>
                     <Border x:Name="StatusPill" Grid.Column="1"
                             Background="#CC3333" CornerRadius="10" Padding="12,4">
@@ -36,13 +56,13 @@
                 <Image x:Name="PreviewImage" Grid.Row="1" Stretch="Uniform" Margin="5"
                        RenderOptions.BitmapScalingMode="NearestNeighbor"/>
                 <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="10,4,10,8">
-                    <TextBlock Text="FPS: "/>
+                    <TextBlock Text="FPS: " Foreground="#AAA"/>
                     <TextBlock x:Name="FpsLabel" Text="--" Foreground="#00CC44" Width="40"/>
-                    <TextBlock Text="Frames: " Margin="20,0,0,0"/>
+                    <TextBlock Text="Frames: " Foreground="#AAA" Margin="20,0,0,0"/>
                     <TextBlock x:Name="FrameCountLabel" Text="0" Foreground="#00CC44" Width="60"/>
-                    <TextBlock Text="Blobs: " Margin="20,0,0,0"/>
+                    <TextBlock Text="Blobs: " Foreground="#AAA" Margin="20,0,0,0"/>
                     <TextBlock x:Name="BlobCountLabel" Text="--" Foreground="#FFB800" Width="40"/>
-                    <TextBlock Text="Markers: " Margin="10,0,0,0"/>
+                    <TextBlock Text="Markers: " Foreground="#AAA" Margin="10,0,0,0"/>
                     <TextBlock x:Name="MarkerCountLabel" Text="--" Foreground="#00CC44" Width="40"/>
                 </StackPanel>
             </Grid>
@@ -50,74 +70,83 @@
 
         <!-- Right panel -->
         <Border Grid.Column="1" Background="#2A2A2A" CornerRadius="4" Padding="12">
-            <StackPanel>
+            <ScrollViewer VerticalScrollBarVisibility="Auto">
+                <StackPanel>
 
-                <!-- Camera -->
-                <TextBlock Text="Camera" FontSize="13" FontWeight="Bold"
-                           Foreground="#1E90FF" Margin="0,0,0,8"/>
-                <Grid Margin="0,0,0,6">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*"/>
-                        <ColumnDefinition Width="Auto"/>
-                    </Grid.ColumnDefinitions>
-                    <ComboBox x:Name="CameraComboBox" Grid.Column="0"
-                              Background="#3C3C3C" Foreground="White" Padding="6,4"/>
-                    <Button Grid.Column="1" Content="↻" Margin="4,0,0,0"
-                            Padding="8,4" Background="#3C3C3C" Foreground="White"
-                            Click="RefreshCameras_Click"/>
-                </Grid>
-                <Button x:Name="OpenButton" Content="▶  Open Camera"
-                        Background="#1E90FF" Foreground="White" FontWeight="Bold"
-                        Padding="8,6" Margin="0,0,0,4" Click="OpenCamera_Click"/>
-                <Button x:Name="CloseButton" Content="■  Close Camera"
-                        Background="#555" Foreground="White" Padding="8,6"
-                        IsEnabled="False" Click="CloseCamera_Click"/>
+                    <!-- Camera -->
+                    <TextBlock Text="Camera" FontSize="13" FontWeight="Bold"
+                               Foreground="#4DA6FF" Margin="0,0,0,8"/>
+                    <Grid Margin="0,0,0,6">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <ComboBox x:Name="CameraComboBox" Grid.Column="0"/>
+                        <Button Grid.Column="1" Content="↻" Margin="4,0,0,0"
+                                Padding="8,4" Background="#4A4A4A" Foreground="#E0E0E0"
+                                Click="RefreshCameras_Click" ToolTip="Refresh camera list"/>
+                    </Grid>
 
-                <Separator Background="#444" Margin="0,14"/>
+                    <!-- Open / Close buttons — high contrast -->
+                    <Button x:Name="OpenButton"
+                            Content="▶  Open Camera"
+                            Background="#1565C0" Foreground="White"
+                            FontWeight="Bold" FontSize="13"
+                            Padding="8,8" Margin="0,0,0,4"
+                            Click="OpenCamera_Click"/>
+                    <Button x:Name="CloseButton"
+                            Content="■  Close Camera"
+                            Background="#555" Foreground="#CCCCCC"
+                            FontSize="13" Padding="8,8"
+                            IsEnabled="False" Click="CloseCamera_Click"/>
 
-                <!-- Stage selector -->
-                <TextBlock Text="Pipeline Stage" FontSize="13" FontWeight="Bold"
-                           Foreground="#1E90FF" Margin="0,0,0,6"/>
-                <TextBlock TextWrapping="Wrap" Foreground="#888" FontSize="10" Margin="0,0,0,10">
-Select stage, then Open Camera.
-First stage that breaks = culprit.
-                </TextBlock>
+                    <Separator Background="#444" Margin="0,14"/>
 
-                <Button x:Name="S0Btn" Tag="0" Click="Stage_Click"
-                        Content="Stage 0 — Read() direct, no processing"
-                        Padding="8,7" Margin="0,0,0,3" FontSize="11"
-                        Background="#1A3A6B" Foreground="White"/>
-                <Button x:Name="S1Btn" Tag="1" Click="Stage_Click"
-                        Content="Stage 1 — CameraCapture wrapper (Read)"
-                        Padding="8,7" Margin="0,0,0,3" FontSize="11"
-                        Background="#3C3C3C" Foreground="White"/>
-                <Button x:Name="S2Btn" Tag="2" Click="Stage_Click"
-                        Content="Stage 2 — CameraCapture (Grab+Retrieve)"
-                        Padding="8,7" Margin="0,0,0,3" FontSize="11"
-                        Background="#3C3C3C" Foreground="White"/>
-                <Button x:Name="S3Btn" Tag="3" Click="Stage_Click"
-                        Content="Stage 3 — + MarkerDetector.Detect()"
-                        Padding="8,7" Margin="0,0,0,3" FontSize="11"
-                        Background="#3C3C3C" Foreground="White"/>
-                <Button x:Name="S4Btn" Tag="4" Click="Stage_Click"
-                        Content="Stage 4 — + DrawDebug overlay"
-                        Padding="8,7" Margin="0,0,0,3" FontSize="11"
-                        Background="#3C3C3C" Foreground="White"/>
-                <Button x:Name="S5Btn" Tag="5" Click="Stage_Click"
-                        Content="Stage 5 — + Gesture + Mouse injection"
-                        Padding="8,7" Margin="0,0,0,3" FontSize="11"
-                        Background="#3C3C3C" Foreground="White"/>
+                    <!-- Stage selector -->
+                    <TextBlock Text="Pipeline Stage" FontSize="13" FontWeight="Bold"
+                               Foreground="#4DA6FF" Margin="0,0,0,4"/>
+                    <TextBlock TextWrapping="Wrap" Foreground="#888" FontSize="10" Margin="0,0,0,10">
+Select a stage then Open Camera.
+The first stage that shows no image = the culprit.
+                    </TextBlock>
 
-                <Separator Background="#444" Margin="0,14"/>
+                    <!-- Stage buttons: selected = bright blue bg + BLACK text for contrast -->
+                    <Button x:Name="S0Btn" Tag="0" Click="Stage_Click"
+                            Content="Stage 0 — Read() direct, no processing"
+                            Padding="8,8" Margin="0,0,0,3" FontSize="11"
+                            Background="#1565C0" Foreground="White"/>
+                    <Button x:Name="S1Btn" Tag="1" Click="Stage_Click"
+                            Content="Stage 1 — CameraCapture wrapper (Read)"
+                            Padding="8,8" Margin="0,0,0,3" FontSize="11"
+                            Background="#3C3C3C" Foreground="#CCCCCC"/>
+                    <Button x:Name="S2Btn" Tag="2" Click="Stage_Click"
+                            Content="Stage 2 — CameraCapture (Grab+Retrieve)"
+                            Padding="8,8" Margin="0,0,0,3" FontSize="11"
+                            Background="#3C3C3C" Foreground="#CCCCCC"/>
+                    <Button x:Name="S3Btn" Tag="3" Click="Stage_Click"
+                            Content="Stage 3 — + MarkerDetector.Detect()"
+                            Padding="8,8" Margin="0,0,0,3" FontSize="11"
+                            Background="#3C3C3C" Foreground="#CCCCCC"/>
+                    <Button x:Name="S4Btn" Tag="4" Click="Stage_Click"
+                            Content="Stage 4 — + DrawDebug overlay"
+                            Padding="8,8" Margin="0,0,0,3" FontSize="11"
+                            Background="#3C3C3C" Foreground="#CCCCCC"/>
+                    <Button x:Name="S5Btn" Tag="5" Click="Stage_Click"
+                            Content="Stage 5 — + Gesture + Mouse injection"
+                            Padding="8,8" Margin="0,0,0,3" FontSize="11"
+                            Background="#3C3C3C" Foreground="#CCCCCC"/>
 
-                <TextBlock Text="Active Stage:" FontSize="11" Foreground="#888"/>
-                <Border Background="#1A1A1A" CornerRadius="4" Padding="8,6" Margin="0,4,0,0">
-                    <TextBlock x:Name="StageDescLabel"
-                               Text="Stage 0 — VideoCapture.Read() directly in MainWindow. Identical to the known-working diagnostic build."
-                               Foreground="#AAA" FontSize="10" TextWrapping="Wrap"/>
-                </Border>
+                    <Separator Background="#444" Margin="0,14"/>
 
-            </StackPanel>
+                    <TextBlock Text="Active Stage:" FontSize="11" Foreground="#888"/>
+                    <Border Background="#1A1A1A" CornerRadius="4" Padding="8,6" Margin="0,4,0,0">
+                        <TextBlock x:Name="StageDescLabel"
+                                   Text="Stage 0 — VideoCapture.Read() directly in MainWindow. Identical to the known-working diagnostic build."
+                                   Foreground="#BBBBBB" FontSize="10" TextWrapping="Wrap"/>
+                    </Border>
+
+                </StackPanel>
+            </ScrollViewer>
         </Border>
     </Grid>
 </Window>
