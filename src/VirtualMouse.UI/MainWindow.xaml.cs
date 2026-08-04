@@ -97,27 +97,37 @@ public partial class MainWindow : System.Windows.Window
         StatusLabel.Foreground = new SolidColorBrush(Color.FromRgb(0, 204, 68));
     }
 
-    private void StopButton_Click(object sender, RoutedEventArgs e) => StopCamera();
-
-    private void StopCamera()
+    private void StopButton_Click(object sender, RoutedEventArgs e)
     {
-        _cts?.Cancel();
+        // Disable button immediately — prevent double-click
+        StopButton.IsEnabled = false;
+        StatusLabel.Text = "Stopping...";
+
+        // Run teardown on a background thread — NEVER block the UI thread.
+        // Release the capture FIRST so the blocking Read() call in CaptureLoop
+        // returns immediately, then wait for the loop to exit cleanly.
+        var cts = _cts;
+        var cap = _capture;
         _cts = null;
-
-        // Give the capture loop a moment to exit before disposing
-        Thread.Sleep(200);
-
-        _capture?.Release();
-        _capture?.Dispose();
         _capture = null;
 
-        Dispatcher.InvokeAsync(() =>
+        Task.Run(() =>
         {
-            StartButton.IsEnabled = true;
-            StopButton.IsEnabled = false;
-            CameraComboBox.IsEnabled = true;
-            StatusLabel.Text = "Stopped";
-            StatusLabel.Foreground = new SolidColorBrush(Color.FromRgb(204, 51, 51));
+            cts?.Cancel();
+            // Release before waiting — this unblocks Read() on the capture thread
+            try { cap?.Release(); } catch { }
+            try { cap?.Dispose(); } catch { }
+            // Small wait for the loop to notice cancellation and exit
+            Thread.Sleep(300);
+
+            Dispatcher.InvokeAsync(() =>
+            {
+                StartButton.IsEnabled = true;
+                StopButton.IsEnabled = false;
+                CameraComboBox.IsEnabled = true;
+                StatusLabel.Text = "Stopped";
+                StatusLabel.Foreground = new SolidColorBrush(Color.FromRgb(204, 51, 51));
+            });
         });
     }
 
