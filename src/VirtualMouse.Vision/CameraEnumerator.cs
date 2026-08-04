@@ -35,47 +35,29 @@ public class CameraEnumerator
     /// </summary>
     public IReadOnlyList<CameraDeviceInfo> Enumerate()
     {
-        // First try to get real names from DirectShow
+        // Use the DirectShow COM API to get device names WITHOUT opening any camera.
+        // Opening a camera during enumeration (even with MSMF) can leave the sensor
+        // in a state where subsequent opens produce black frames.
         var names = TryGetDirectShowNames();
 
         var devices = new List<CameraDeviceInfo>();
 
         if (names.Count > 0)
         {
-            // We have real names — verify each is openable via OpenCV
+            // Assign sequential indices to the devices returned by COM.
+            // The index order from ICreateDevEnum matches the OpenCV device index.
             for (int i = 0; i < names.Count && i < MaxProbeIndex; i++)
             {
-                try
-                {
-                    // Use MSMF — ArduCam docs say DSHOW causes black frames on their cameras
-                    using var cap = new VideoCapture(i, VideoCaptureAPIs.MSMF);
-                    if (cap.IsOpened())
-                    {
-                        devices.Add(new CameraDeviceInfo(i, names[i]));
-                        _logger.LogDebug("Camera {Index}: {Name}", i, names[i]);
-                    }
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogDebug("Index {Index} open check failed: {Msg}", i, ex.Message);
-                }
+                devices.Add(new CameraDeviceInfo(i, names[i]));
+                _logger.LogDebug("Camera {Index}: {Name}", i, names[i]);
             }
         }
         else
         {
-            // Fallback: probe indices and use generic labels
-            _logger.LogWarning("DirectShow name query failed; falling back to index probing.");
-            for (int i = 0; i < MaxProbeIndex; i++)
-            {
-                try
-                {
-                    // Use MSMF — ArduCam docs say DSHOW causes black frames on their cameras
-                    using var cap = new VideoCapture(i, VideoCaptureAPIs.MSMF);
-                    if (cap.IsOpened())
-                        devices.Add(new CameraDeviceInfo(i, $"Camera {i} (Index {i})"));
-                }
-                catch { /* skip */ }
-            }
+            // Fallback: if COM enumeration failed entirely, add a single generic entry.
+            // Do NOT open any camera to probe — just offer index 0.
+            _logger.LogWarning("DirectShow name query failed; offering Camera 0 as fallback.");
+            devices.Add(new CameraDeviceInfo(0, "Camera 0"));
         }
 
         _logger.LogInformation("Enumerated {Count} camera(s).", devices.Count);
