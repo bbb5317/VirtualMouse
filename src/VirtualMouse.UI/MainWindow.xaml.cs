@@ -133,35 +133,38 @@ public partial class MainWindow : System.Windows.Window
 
     private void ResetUsb_Click(object sender, RoutedEventArgs e)
     {
-        // Use pnputil to restart the camera device without unplugging.
-        // This resets the USB port state that our app may have left dirty.
         StatusLabel.Text       = "Resetting USB...";
         StatusLabel.Foreground = new SolidColorBrush(Color.FromRgb(200, 140, 0));
 
         Task.Run(() =>
         {
-            try
+            // ArduCam OV9281 exact hardware ID: VID_0C45&PID_6366
+            // Try devcon first (works on all Windows editions including Home).
+            // devcon must be in PATH or placed next to the exe.
+            // Download from: https://learn.microsoft.com/windows-hardware/drivers/devtest/devcon
+            bool success = TryDevcon("USB\\VID_0C45&PID_6366*");
+
+            if (!success)
             {
-                // Find the hardware ID of the ArduCam / UVC device and restart it
-                var psi = new ProcessStartInfo("pnputil",
-                    "/restart-device \"USB\\VID_0C45*\" /subtree")
-                {
-                    UseShellExecute        = true,
-                    Verb                   = "runas",   // requires admin
-                    CreateNoWindow         = true,
-                    WindowStyle            = ProcessWindowStyle.Hidden
-                };
-                var proc = Process.Start(psi);
-                proc?.WaitForExit(5000);
+                // Fallback: pnputil (requires Pro/Enterprise and no pending reboot)
+                success = TryPnpUtil("USB\\VID_0C45&PID_6366&MI_00*");
             }
-            catch (Exception ex)
+
+            if (!success)
             {
                 Dispatcher.InvokeAsync(() =>
-                    MessageBox.Show($"USB reset failed:\n{ex.Message}\n\nTry running as Administrator.",
+                    MessageBox.Show(
+                        "USB reset failed.\n\n" +
+                        "Options:\n" +
+                        "1. Reboot the computer (clears pending device flags).\n" +
+                        "2. Place devcon.exe next to VirtualMouse.UI.exe and try again.\n" +
+                        "   Download: https://aka.ms/devcon\n" +
+                        "3. In Device Manager → Universal Serial Bus controllers,\n" +
+                        "   disable then enable the USB Root Hub the camera is on.",
                         "Reset Failed", MessageBoxButton.OK, MessageBoxImage.Warning));
             }
 
-            Thread.Sleep(2000); // wait for re-enumeration
+            Thread.Sleep(2000);
 
             Dispatcher.InvokeAsync(() =>
             {
@@ -170,6 +173,40 @@ public partial class MainWindow : System.Windows.Window
                 RefreshCameraList();
             });
         });
+    }
+
+    private static bool TryDevcon(string hwid)
+    {
+        try
+        {
+            // disable
+            var p1 = Process.Start(new ProcessStartInfo("devcon", $"disable \"@{hwid}\"")
+                { UseShellExecute = true, Verb = "runas", CreateNoWindow = true,
+                  WindowStyle = ProcessWindowStyle.Hidden });
+            p1?.WaitForExit(5000);
+            Thread.Sleep(800);
+            // enable
+            var p2 = Process.Start(new ProcessStartInfo("devcon", $"enable \"@{hwid}\"")
+                { UseShellExecute = true, Verb = "runas", CreateNoWindow = true,
+                  WindowStyle = ProcessWindowStyle.Hidden });
+            p2?.WaitForExit(5000);
+            return true;
+        }
+        catch { return false; }
+    }
+
+    private static bool TryPnpUtil(string hwid)
+    {
+        try
+        {
+            var p = Process.Start(new ProcessStartInfo("pnputil",
+                $"/restart-device \"{hwid}\"")
+                { UseShellExecute = true, Verb = "runas", CreateNoWindow = true,
+                  WindowStyle = ProcessWindowStyle.Hidden });
+            p?.WaitForExit(5000);
+            return p?.ExitCode == 0;
+        }
+        catch { return false; }
     }
 
     private void CaptureLoop()
