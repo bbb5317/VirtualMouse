@@ -2,7 +2,7 @@ using System.Diagnostics;
 using System.Windows;
 using System.Windows.Media.Imaging;
 using OpenCvSharp;
-using OpenCvSharp.Extensions;
+using OpenCvSharp.Extensions; // BitmapSourceConverter
 using VirtualMouse.Core;
 using VirtualMouse.Core.Models;
 using VirtualMouse.Input;

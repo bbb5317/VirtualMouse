@@ -12,10 +12,15 @@ public class GestureRecognizer
     private readonly ILogger<GestureRecognizer> _logger;
     private readonly TrackingSettings _settings;
 
-    // Previous frame positions for delta calculation
+    // Previous frame positions for delta calculation.
+    // _prevLeftThumbPos and _prevLeftIndexPos are reserved for future gesture
+    // implementations (e.g., scroll, drag) and are intentionally not yet read.
     private (double X, double Y)? _prevRightIndexPos;
+
+#pragma warning disable CS0414 // Field assigned but value never used — reserved for Phase 2 gestures
     private (double X, double Y)? _prevLeftThumbPos;
     private (double X, double Y)? _prevLeftIndexPos;
+#pragma warning restore CS0414
 
     public GestureRecognizer(ILogger<GestureRecognizer> logger, TrackingSettings settings)
     {
@@ -67,7 +72,7 @@ public class GestureRecognizer
             _logger.LogDebug("Left pinch distance: {Distance:F2}px (threshold: {Threshold}px)", distance, _settings.PinchThresholdPixels);
         }
 
-        // --- Right Click: Right Middle finger taps (future gesture) ---
+        // --- Right Click: Right Middle finger taps (future gesture — Phase 2) ---
         // TODO: Implement right-click gesture using RightMiddle finger
 
         return gesture;
