@@ -109,9 +109,29 @@ keyboard keys and other static bright objects are ignored.
 
                     <Button Content="⟳  Reset Background Model"
                             Background="#3C3C3C" Foreground="{StaticResource TextBrush}"
-                            BorderBrush="{StaticResource AccentBrush}" Padding="8,6" Margin="0,0,0,4"
+                            BorderBrush="{StaticResource AccentBrush}" Padding="8,6" Margin="0,0,0,8"
                             Click="ResetBackground_Click"
                             ToolTip="Re-learn the background after repositioning the camera or changing lighting"/>
+
+                    <!-- Exposure (log2-seconds, DirectShow convention) -->
+                    <TextBlock Text="Manual Exposure (log₂s):"
+                               ToolTip="-7=1/128s  -6=1/64s  -5=1/32s  -4=1/16s. Auto-exposure is always disabled."/>
+                    <Grid Margin="0,2,0,8">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="42"/></Grid.ColumnDefinitions>
+                        <Slider x:Name="ExposureSlider" Grid.Column="0" Minimum="-10" Maximum="-1" Value="-6"
+                                VerticalAlignment="Center" ValueChanged="ExposureSlider_ValueChanged"/>
+                        <TextBlock x:Name="ExposureLabel" Grid.Column="1" Text="-6" Margin="6,0,0,0" VerticalAlignment="Center"/>
+                    </Grid>
+
+                    <!-- Gain -->
+                    <TextBlock Text="Manual Gain:"
+                               ToolTip="0 = minimum gain. Raise if markers are too dim; lower if noise is too high."/>
+                    <Grid Margin="0,2,0,8">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="42"/></Grid.ColumnDefinitions>
+                        <Slider x:Name="GainSlider" Grid.Column="0" Minimum="0" Maximum="100" Value="0"
+                                VerticalAlignment="Center" ValueChanged="GainSlider_ValueChanged"/>
+                        <TextBlock x:Name="GainLabel" Grid.Column="1" Text="0" Margin="6,0,0,0" VerticalAlignment="Center"/>
+                    </Grid>
 
                     <!-- Learning Rate -->
                     <TextBlock Text="Background Learning Rate:"

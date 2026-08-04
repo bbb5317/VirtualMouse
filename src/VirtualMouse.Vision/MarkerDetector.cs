@@ -6,40 +6,46 @@ using Microsoft.Extensions.Logging;
 namespace VirtualMouse.Vision;
 
 /// <summary>
-/// Detects retroreflective marker blobs using motion-based background subtraction.
+/// Detects retroreflective marker blobs using motion-based detection.
 ///
-/// The core insight: keyboard key characters are static — they never move.
-/// Retroreflective finger markers always move. Therefore, a background subtraction
-/// model (MOG2) that learns the static scene will pass only the moving markers
-/// and reject everything static, regardless of brightness or shape.
+/// Two-stage motion detection:
 ///
-/// Pipeline:
-///   1. Convert frame to grayscale.
-///   2. Apply MOG2 background subtractor → foreground mask (moving pixels only).
-///   3. Dilate the mask slightly to fill small gaps within a marker.
-///   4. Mask the original grayscale frame with the foreground mask.
-///   5. Binary threshold on the masked frame to isolate bright moving blobs.
-///   6. Connected components → filter by area → sub-pixel centroid via moments.
+///   Stage 1 — Frame Differencing (immediate, works from frame 2):
+///     Computes the absolute difference between the current and previous frame.
+///     Anything that changed between frames is a candidate. Fast and reliable
+///     even without a warm-up period.
+///
+///   Stage 2 — MOG2 Background Subtraction (after warm-up):
+///     Builds a statistical model of the static scene. After ~300 frames it
+///     reliably separates moving objects from the static background.
+///     More robust than frame differencing for slow-moving markers.
+///
+///   The two masks are OR-combined so a blob detected by either method passes.
+///
+/// PREREQUISITE: Auto-exposure (AGC) must be disabled on the camera.
+/// With AGC active, every pixel shifts every frame and both methods fail.
+/// CameraCapture.Open() disables AGC automatically.
 /// </summary>
 public class MarkerDetector : IDisposable
 {
     private readonly ILogger<MarkerDetector> _logger;
     private readonly TrackingSettings _settings;
 
-    // Reusable Mats — allocated once to avoid per-frame GC pressure
-    private readonly Mat _grayFrame   = new();
-    private readonly Mat _fgMask      = new();
-    private readonly Mat _maskedGray  = new();
-    private readonly Mat _threshFrame = new();
+    // Reusable Mats
+    private readonly Mat _grayFrame    = new();
+    private readonly Mat _prevFrame    = new();
+    private readonly Mat _diffMask     = new();
+    private readonly Mat _fgMaskMog2   = new();
+    private readonly Mat _combinedMask = new();
+    private readonly Mat _maskedGray   = new();
+    private readonly Mat _threshFrame  = new();
 
-    // MOG2 background subtractor
     private BackgroundSubtractorMOG2 _bgSub;
-
-    // Warm-up: the background model needs a few seconds of frames before it is
-    // reliable. During warm-up we show blobs but do not inject mouse events.
+    private bool _hasPrevFrame;
     private int _framesSeen;
-    private const int WarmUpFrames = 60; // ~0.5s at 120fps
 
+    // MOG2 is considered warmed up after this many frames
+    private const int WarmUpFrames = 300;
     public bool IsWarmedUp => _framesSeen >= WarmUpFrames;
 
     public MarkerDetector(ILogger<MarkerDetector> logger, TrackingSettings settings)
@@ -51,20 +57,17 @@ public class MarkerDetector : IDisposable
 
     private BackgroundSubtractorMOG2 CreateBgSub() =>
         BackgroundSubtractorMOG2.Create(
-            history: 300,          // frames to build the model (~2.5s at 120fps)
-            varThreshold: 25,      // sensitivity — lower = more sensitive to change
-            detectShadows: false); // shadows are irrelevant for bright markers
+            history: 500,
+            varThreshold: 60,   // raised significantly — OV9281 has per-frame noise
+            detectShadows: false);
 
-    /// <summary>
-    /// Resets the background model. Call this when the camera is repositioned
-    /// or the scene changes significantly (e.g. lights turned on/off).
-    /// </summary>
     public void ResetBackground()
     {
         _bgSub.Dispose();
         _bgSub = CreateBgSub();
+        _hasPrevFrame = false;
         _framesSeen = 0;
-        _logger.LogInformation("Background model reset. Warming up...");
+        _logger.LogInformation("Background model reset.");
     }
 
     // ── Main Detection ─────────────────────────────────────────────────────
@@ -77,25 +80,42 @@ public class MarkerDetector : IDisposable
         else
             frame.CopyTo(_grayFrame);
 
-        // Step 2: Background subtraction — produces a binary foreground mask
-        // learningRate: small positive value so the model slowly adapts to
-        // gradual lighting changes without immediately absorbing moving markers.
-        _bgSub.Apply(_grayFrame, _fgMask, learningRate: _settings.BackgroundLearningRate);
+        // Step 2a: Frame differencing — works immediately from frame 2
+        if (_hasPrevFrame)
+        {
+            Cv2.Absdiff(_grayFrame, _prevFrame, _diffMask);
+            // Threshold the diff: only pixels that changed by more than ~15 counts
+            Cv2.Threshold(_diffMask, _diffMask, 15, 255, ThresholdTypes.Binary);
+            Cv2.Dilate(_diffMask, _diffMask, null, iterations: 4);
+        }
+        else
+        {
+            _diffMask.SetTo(Scalar.Black);
+        }
+
+        // Step 2b: MOG2 background subtraction — reliable after warm-up
+        _bgSub.Apply(_grayFrame, _fgMaskMog2, learningRate: _settings.BackgroundLearningRate);
+        Cv2.Dilate(_fgMaskMog2, _fgMaskMog2, null, iterations: 3);
+
+        // Step 2c: Combine both masks — a blob detected by either method passes
+        if (_hasPrevFrame)
+            Cv2.BitwiseOr(_diffMask, _fgMaskMog2, _combinedMask);
+        else
+            _fgMaskMog2.CopyTo(_combinedMask);
+
+        // Save current frame as previous
+        _grayFrame.CopyTo(_prevFrame);
+        _hasPrevFrame = true;
         _framesSeen++;
 
-        // Step 3: Dilate the foreground mask to fill small intra-marker gaps
-        // (the centre of a retroreflective marker can sometimes be slightly
-        // darker than its edges, creating a ring rather than a filled blob).
-        Cv2.Dilate(_fgMask, _fgMask, null, iterations: 3);
+        // Step 3: Apply motion mask to grayscale frame
+        Cv2.BitwiseAnd(_grayFrame, _grayFrame, _maskedGray, _combinedMask);
 
-        // Step 4: Mask the grayscale frame — only moving pixels remain
-        Cv2.BitwiseAnd(_grayFrame, _grayFrame, _maskedGray, _fgMask);
-
-        // Step 5: Binary threshold — isolate bright moving blobs
+        // Step 4: Binary threshold — isolate bright moving blobs
         Cv2.Threshold(_maskedGray, _threshFrame,
             _settings.BrightnessThreshold, 255, ThresholdTypes.Binary);
 
-        // Step 6: Connected components
+        // Step 5: Connected components
         using var labels    = new Mat();
         using var stats     = new Mat();
         using var centroids = new Mat();
@@ -115,43 +135,29 @@ public class MarkerDetector : IDisposable
             int bw = stats.At<int>(label, (int)ConnectedComponentsTypes.Width);
             int bh = stats.At<int>(label, (int)ConnectedComponentsTypes.Height);
 
-            // Step 7: Sub-pixel centroid via intensity-weighted image moments
             var roi = new Rect(
                 Math.Max(0, bx), Math.Max(0, by),
                 Math.Min(bw, frame.Width  - bx),
                 Math.Min(bh, frame.Height - by));
             if (roi.Width <= 0 || roi.Height <= 0) continue;
 
-            using var roiGray  = new Mat(_grayFrame,   roi);
+            using var roiGray   = new Mat(_grayFrame,   roi);
             using var roiThresh = new Mat(_threshFrame, roi);
             using var masked    = new Mat();
             Cv2.BitwiseAnd(roiGray, roiThresh, masked);
             var moments = Cv2.Moments(masked, binaryImage: false);
 
-            double subX, subY;
-            if (moments.M00 > 0)
-            {
-                subX = bx + moments.M10 / moments.M00;
-                subY = by + moments.M01 / moments.M00;
-            }
-            else
-            {
-                subX = centroids.At<double>(label, 0);
-                subY = centroids.At<double>(label, 1);
-            }
-
-            var meanIntensity = Cv2.Mean(roiGray, roiThresh).Val0;
+            double subX = moments.M00 > 0 ? bx + moments.M10 / moments.M00 : centroids.At<double>(label, 0);
+            double subY = moments.M00 > 0 ? by + moments.M01 / moments.M00 : centroids.At<double>(label, 1);
 
             blobs.Add(new MarkerBlob
             {
                 X = subX, Y = subY,
                 Area = area,
-                MeanIntensity = meanIntensity
+                MeanIntensity = Cv2.Mean(roiGray, roiThresh).Val0
             });
         }
 
-        _logger.LogDebug("Frame {F}: {C} blob(s) detected (warmed up: {W}).",
-            _framesSeen, blobs.Count, IsWarmedUp);
         return blobs;
     }
 
@@ -163,35 +169,28 @@ public class MarkerDetector : IDisposable
         if (debug.Channels() == 1)
             Cv2.CvtColor(debug, debug, ColorConversionCodes.GRAY2BGR);
 
-        // Warm-up overlay
         if (!IsWarmedUp)
         {
-            int remaining = WarmUpFrames - _framesSeen;
-            Cv2.PutText(debug,
-                $"Learning background... ({remaining} frames)",
-                new Point(10, 30),
-                HersheyFonts.HersheySimplex, 0.7, new Scalar(0, 165, 255), 2);
+            Cv2.PutText(debug, $"Building background model... ({WarmUpFrames - _framesSeen} frames)",
+                new Point(10, 30), HersheyFonts.HersheySimplex, 0.6, new Scalar(0, 165, 255), 2);
         }
 
         foreach (var blob in blobs)
         {
-            var center = new Point((int)blob.X, (int)blob.Y);
-            Cv2.Circle(debug, center, 8, Scalar.Green, 2);
-            Cv2.Circle(debug, center, 2, Scalar.Red, -1);
+            var c = new Point((int)blob.X, (int)blob.Y);
+            Cv2.Circle(debug, c, 8, Scalar.Green, 2);
+            Cv2.Circle(debug, c, 2, Scalar.Red, -1);
             Cv2.PutText(debug, $"({blob.X:F0},{blob.Y:F0})",
-                new Point(center.X + 10, center.Y),
-                HersheyFonts.HersheySimplex, 0.35, Scalar.Yellow, 1);
+                new Point(c.X + 10, c.Y), HersheyFonts.HersheySimplex, 0.35, Scalar.Yellow, 1);
         }
-
         return debug;
     }
 
     public void Dispose()
     {
-        _grayFrame.Dispose();
-        _fgMask.Dispose();
-        _maskedGray.Dispose();
-        _threshFrame.Dispose();
+        _grayFrame.Dispose(); _prevFrame.Dispose(); _diffMask.Dispose();
+        _fgMaskMog2.Dispose(); _combinedMask.Dispose();
+        _maskedGray.Dispose(); _threshFrame.Dispose();
         _bgSub.Dispose();
     }
 }

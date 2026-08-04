@@ -6,8 +6,14 @@ namespace VirtualMouse.Vision;
 
 /// <summary>
 /// Manages the camera capture session using OpenCvSharp4 (VideoCapture).
-/// The ArduCam-OV9281 is UVC-compliant, so it is accessible via DirectShow/MSMF
-/// as a standard webcam — no proprietary SDK required.
+/// The ArduCam-OV9281 is UVC-compliant, accessible via DirectShow on Windows.
+///
+/// CRITICAL for background subtraction: auto-exposure (AGC) must be disabled.
+/// When AGC is active, the camera continuously adjusts gain and exposure to
+/// maintain a target brightness. This causes every pixel's value to shift
+/// slightly on every frame — even static pixels — making MOG2 classify the
+/// entire frame as "changed" and defeating background subtraction entirely.
+/// With fixed exposure, static pixels are truly stable and MOG2 works correctly.
 /// </summary>
 public sealed class CameraCapture : IDisposable
 {
@@ -17,7 +23,6 @@ public sealed class CameraCapture : IDisposable
     private bool _isRunning;
 
     public event EventHandler<Mat>? FrameReady;
-
     public bool IsOpen => _capture?.IsOpened() ?? false;
 
     public CameraCapture(ILogger<CameraCapture> logger, TrackingSettings settings)
@@ -26,40 +31,60 @@ public sealed class CameraCapture : IDisposable
         _settings = settings;
     }
 
-    /// <summary>
-    /// Opens the camera device and configures resolution and framerate.
-    /// </summary>
-    /// <returns>True if the camera was opened successfully.</returns>
     public bool Open()
     {
         try
         {
-            // Use DirectShow backend on Windows for best compatibility with UVC cameras
             _capture = new VideoCapture(_settings.CameraDeviceIndex, VideoCaptureAPIs.DSHOW);
-
             if (!_capture.IsOpened())
             {
-                _logger.LogError("Failed to open camera at device index {Index}.", _settings.CameraDeviceIndex);
+                _logger.LogError("Failed to open camera at index {Index}.", _settings.CameraDeviceIndex);
                 return false;
             }
 
-            // Configure the OV9281 for maximum resolution and high framerate
-            _capture.Set(VideoCaptureProperties.FrameWidth, _settings.FrameWidth);
+            // Resolution and framerate
+            _capture.Set(VideoCaptureProperties.FrameWidth,  _settings.FrameWidth);
             _capture.Set(VideoCaptureProperties.FrameHeight, _settings.FrameHeight);
-            _capture.Set(VideoCaptureProperties.Fps, _settings.TargetFps);
+            _capture.Set(VideoCaptureProperties.Fps,         _settings.TargetFps);
 
-            // The OV9281 is monochrome; request GREY format if supported
-            // Note: Some UVC drivers may still return BGR; the MarkerDetector handles both.
+            // Request raw (no RGB conversion) — OV9281 is monochrome
             _capture.Set(VideoCaptureProperties.ConvertRgb, 0);
 
-            var actualWidth  = _capture.Get(VideoCaptureProperties.FrameWidth);
-            var actualHeight = _capture.Get(VideoCaptureProperties.FrameHeight);
-            var actualFps    = _capture.Get(VideoCaptureProperties.Fps);
+            // ── Disable Auto-Exposure (AGC) ────────────────────────────────
+            // This is the single most important setting for background subtraction.
+            // AutoExposure property: 0.25 = manual, 0.75 = auto (DirectShow convention).
+            bool autoExpDisabled = _capture.Set(VideoCaptureProperties.AutoExposure, 0.25);
+            _logger.LogInformation("Auto-exposure disable: {Result}", autoExpDisabled ? "OK" : "not supported by driver");
+
+            // Set a fixed exposure value.
+            // DirectShow exposure is in log2 seconds: -7 = 1/128s, -6 = 1/64s, -5 = 1/32s.
+            // For retroreflective markers under IR/visible illumination, -6 to -7 works well.
+            // The user can adjust this via the Exposure slider in the UI.
+            if (_settings.ManualExposure != 0)
+            {
+                bool expSet = _capture.Set(VideoCaptureProperties.Exposure, _settings.ManualExposure);
+                _logger.LogInformation("Manual exposure {V}: {Result}", _settings.ManualExposure, expSet ? "OK" : "not supported");
+            }
+
+            // Disable auto white balance (irrelevant for monochrome but prevents driver interference)
+            _capture.Set(VideoCaptureProperties.AutoWB, 0);
+
+            // Fix gain to prevent AGC from compensating for disabled auto-exposure
+            if (_settings.ManualGain >= 0)
+            {
+                bool gainSet = _capture.Set(VideoCaptureProperties.Gain, _settings.ManualGain);
+                _logger.LogInformation("Manual gain {V}: {Result}", _settings.ManualGain, gainSet ? "OK" : "not supported");
+            }
+
+            var w   = _capture.Get(VideoCaptureProperties.FrameWidth);
+            var h   = _capture.Get(VideoCaptureProperties.FrameHeight);
+            var fps = _capture.Get(VideoCaptureProperties.Fps);
+            var exp = _capture.Get(VideoCaptureProperties.Exposure);
+            var gain = _capture.Get(VideoCaptureProperties.Gain);
 
             _logger.LogInformation(
-                "Camera opened: {Width}x{Height} @ {Fps}fps (requested {ReqW}x{ReqH} @ {ReqFps}fps).",
-                actualWidth, actualHeight, actualFps,
-                _settings.FrameWidth, _settings.FrameHeight, _settings.TargetFps);
+                "Camera ready: {W}x{H} @ {FPS}fps | exposure={E} | gain={G}",
+                w, h, fps, exp, gain);
 
             return true;
         }
@@ -70,18 +95,11 @@ public sealed class CameraCapture : IDisposable
         }
     }
 
-    /// <summary>
-    /// Starts the frame capture loop on a background thread.
-    /// Raises FrameReady for each captured frame.
-    /// </summary>
     public void StartCapture(CancellationToken cancellationToken)
     {
-        if (!IsOpen)
-            throw new InvalidOperationException("Camera is not open. Call Open() first.");
-
+        if (!IsOpen) throw new InvalidOperationException("Camera not open.");
         _isRunning = true;
         Task.Run(() => CaptureLoop(cancellationToken), cancellationToken);
-        _logger.LogInformation("Camera capture loop started.");
     }
 
     private void CaptureLoop(CancellationToken cancellationToken)
@@ -90,26 +108,13 @@ public sealed class CameraCapture : IDisposable
         while (_isRunning && !cancellationToken.IsCancellationRequested)
         {
             if (_capture!.Read(frame) && !frame.Empty())
-            {
-                // Clone the frame before raising the event to avoid data races
                 FrameReady?.Invoke(this, frame.Clone());
-            }
             else
-            {
-                _logger.LogWarning("Failed to read frame from camera.");
-                Thread.Sleep(10);
-            }
+                Thread.Sleep(5);
         }
-        _logger.LogInformation("Camera capture loop stopped.");
     }
 
-    /// <summary>
-    /// Stops the capture loop and releases the camera resource.
-    /// </summary>
-    public void Stop()
-    {
-        _isRunning = false;
-    }
+    public void Stop() => _isRunning = false;
 
     public void Dispose()
     {

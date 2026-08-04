@@ -31,6 +31,22 @@ public class TrackingSettings
     /// </summary>
     public double MaxBlobArea { get; set; } = 600.0;
 
+    // ── Camera Exposure (CRITICAL for background subtraction) ────────────────
+
+    /// <summary>
+    /// Manual exposure value in DirectShow log2-seconds units.
+    /// -7 = 1/128s, -6 = 1/64s, -5 = 1/32s.
+    /// Set to 0 to skip setting exposure (use driver default).
+    /// Auto-exposure is always disabled regardless of this value.
+    /// </summary>
+    public double ManualExposure { get; set; } = -6;
+
+    /// <summary>
+    /// Manual gain value (0–255 typical range, driver-dependent).
+    /// Set to -1 to skip setting gain.
+    /// </summary>
+    public double ManualGain { get; set; } = 0;
+
     // ── Background Subtraction (MOG2) ──────────────────────────────────────
 
     /// <summary>

@@ -223,11 +223,15 @@ public partial class MainWindow : System.Windows.Window
             SensitivitySlider.Value  = _settings.MouseSensitivity;
             HysteresisSlider.Value   = _settings.ActivationHysteresisPixels;
             LearningRateSlider.Value = _settings.BackgroundLearningRate;
+            ExposureSlider.Value     = _settings.ManualExposure != 0 ? _settings.ManualExposure : -6;
+            GainSlider.Value         = _settings.ManualGain >= 0 ? _settings.ManualGain : 0;
 
             ThresholdLabel.Text    = $"{_settings.BrightnessThreshold}";
             SensitivityLabel.Text  = $"{_settings.MouseSensitivity:F1}";
             HysteresisLabel.Text   = $"{(int)_settings.ActivationHysteresisPixels}";
             LearningRateLabel.Text = $"{_settings.BackgroundLearningRate:F3}";
+            ExposureLabel.Text     = $"{(int)_settings.ManualExposure}";
+            GainLabel.Text         = $"{(int)_settings.ManualGain}";
 
             CalibThreshLabel.Text = _settings.ActivationThresholdPixels > 0
                 ? $"{_settings.ActivationThresholdPixels:F0} px"
@@ -281,6 +285,23 @@ public partial class MainWindow : System.Windows.Window
         if (_settings == null || _loadingSettings) return;
         _settings.BackgroundLearningRate = e.NewValue;
         if (LearningRateLabel != null) LearningRateLabel.Text = $"{e.NewValue:F3}";
+        _settingsService.Save(_settings);
+    }
+
+    private void ExposureSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (_settings == null || _loadingSettings) return;
+        _settings.ManualExposure = (int)e.NewValue;
+        if (ExposureLabel != null) ExposureLabel.Text = $"{(int)e.NewValue}";
+        _settingsService.Save(_settings);
+        // Note: exposure change takes effect on next camera Open(). Show a hint.
+    }
+
+    private void GainSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (_settings == null || _loadingSettings) return;
+        _settings.ManualGain = (int)e.NewValue;
+        if (GainLabel != null) GainLabel.Text = $"{(int)e.NewValue}";
         _settingsService.Save(_settings);
     }
 
