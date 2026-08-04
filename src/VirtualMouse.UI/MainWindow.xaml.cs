@@ -145,6 +145,7 @@ public partial class MainWindow : System.Windows.Window
     {
         using (frame)
         {
+            // Always run detection so the slow pass accumulates displacement data
             var blobs  = _detector.Detect(frame);
             var groups = _grouper.Group(blobs);
 
@@ -155,12 +156,18 @@ public partial class MainWindow : System.Windows.Window
             }
 
             _frameCount++;
-            if (_fpsStopwatch.ElapsedMilliseconds < 100) return;
+
+            // Throttle UI updates to ~30fps
+            if (_fpsStopwatch.ElapsedMilliseconds < 33) return;
 
             double fps = _frameCount / _fpsStopwatch.Elapsed.TotalSeconds;
             _frameCount = 0;
             _fpsStopwatch.Restart();
 
+            // Always draw the debug frame so the preview is never blank.
+            // During identification this shows the raw frame with all bright
+            // blobs highlighted so the user can see what the camera sees.
+            // After identification it shows only confirmed marker windows.
             using var debugFrame = _detector.DrawDebug(frame, blobs);
             var bitmap = MatToBitmapSource(debugFrame);
             bitmap.Freeze();
@@ -171,12 +178,13 @@ public partial class MainWindow : System.Windows.Window
             bool identifying = _detector.IsIdentifying;
             int confirmed    = _detector.ConfirmedMarkerCount;
             int passes       = _detector.SlowPassCount;
+            int blobCount    = blobs.Count;
 
             Dispatcher.InvokeAsync(() =>
             {
                 CameraPreviewImage.Source = bitmap;
                 FpsLabel.Text = $"{fps:F0}";
-                BlobCountLabel.Text = $"{blobs.Count}";
+                BlobCountLabel.Text = $"{blobCount}";
                 MarkerCountLabel.Text = $"{confirmed}";
                 PinchDistLabel.Text = pinchDist > 0 ? $"{pinchDist:F0}px" : "--";
                 CalibDistLabel.Text = pinchDist > 0 ? $"{pinchDist:F0} px" : "-- px";

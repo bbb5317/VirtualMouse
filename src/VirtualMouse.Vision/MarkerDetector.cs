@@ -237,28 +237,52 @@ public class MarkerDetector : IDisposable
         if (debug.Channels() == 1)
             Cv2.CvtColor(debug, debug, ColorConversionCodes.GRAY2BGR);
 
-        string status = IsIdentifying
-            ? $"Identifying markers... (move your hands)"
-            : $"Tracking {ConfirmedMarkerCount} markers";
-        var colour = IsIdentifying ? new Scalar(0, 140, 255) : new Scalar(0, 220, 0);
-        Cv2.PutText(debug, status, new Point(10, 28),
-            HersheyFonts.HersheySimplex, 0.65, colour, 2);
-
-        // Draw confirmed marker search windows (orange)
-        foreach (var m in _confirmedMarkers)
+        if (IsIdentifying)
         {
-            Cv2.Rectangle(debug,
-                new Point((int)(m.X - FastWindowRadius), (int)(m.Y - FastWindowRadius)),
-                new Point((int)(m.X + FastWindowRadius), (int)(m.Y + FastWindowRadius)),
-                new Scalar(0, 140, 255), 1);
+            // During identification: show ALL bright blobs from the last slow pass
+            // so the user can see what the camera sees and verify the threshold.
+            string idStatus = $"Identifying... pass {SlowPassCount} | {_prevSlowBlobs.Count} blobs seen";
+            Cv2.PutText(debug, idStatus, new Point(10, 28),
+                HersheyFonts.HersheySimplex, 0.60, new Scalar(0, 140, 255), 2);
+
+            // Draw all blobs seen in the last slow pass as yellow circles
+            foreach (var (bx, by) in _prevSlowBlobs)
+            {
+                var c = new Point((int)bx, (int)by);
+                Cv2.Circle(debug, c, 6, new Scalar(0, 220, 255), 1);
+            }
+
+            // Draw confirmed markers so far as bright green
+            foreach (var m in _confirmedMarkers)
+            {
+                var c = new Point((int)m.X, (int)m.Y);
+                Cv2.Circle(debug, c, 10, new Scalar(0, 255, 80), 2);
+                Cv2.Circle(debug, c, 3,  new Scalar(0, 255, 80), -1);
+            }
         }
-
-        // Draw detected blobs (green)
-        foreach (var blob in blobs)
+        else
         {
-            var c = new Point((int)blob.X, (int)blob.Y);
-            Cv2.Circle(debug, c, 8, Scalar.Green, 2);
-            Cv2.Circle(debug, c, 2, Scalar.Red, -1);
+            // After identification: show confirmed marker search windows and tracked blobs
+            string trackStatus = $"Tracking {ConfirmedMarkerCount} markers";
+            Cv2.PutText(debug, trackStatus, new Point(10, 28),
+                HersheyFonts.HersheySimplex, 0.65, new Scalar(0, 220, 0), 2);
+
+            // Draw confirmed marker search windows (orange boxes)
+            foreach (var m in _confirmedMarkers)
+            {
+                Cv2.Rectangle(debug,
+                    new Point((int)(m.X - FastWindowRadius), (int)(m.Y - FastWindowRadius)),
+                    new Point((int)(m.X + FastWindowRadius), (int)(m.Y + FastWindowRadius)),
+                    new Scalar(0, 140, 255), 1);
+            }
+
+            // Draw tracked blobs (green circles with red centre dot)
+            foreach (var blob in blobs)
+            {
+                var c = new Point((int)blob.X, (int)blob.Y);
+                Cv2.Circle(debug, c, 8, Scalar.Green, 2);
+                Cv2.Circle(debug, c, 2, Scalar.Red, -1);
+            }
         }
 
         return debug;
