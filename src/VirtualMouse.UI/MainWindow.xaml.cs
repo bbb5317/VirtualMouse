@@ -1,68 +1,80 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using OpenCvSharp;
 using VirtualMouse.Core;
-using VirtualMouse.Core.Models;
 using VirtualMouse.Input;
 using VirtualMouse.Vision;
 
 namespace VirtualMouse.UI;
 
+/// <summary>
+/// Staged diagnostic window. Each stage adds exactly one pipeline component.
+/// Select a stage, press Open Camera, observe whether preview shows a live image.
+///
+/// Stage 0 — VideoCapture.Read() directly in MainWindow. No wrapper. No processing.
+///           IDENTICAL to the known-working v0.7.2-diag build.
+/// Stage 1 — CameraCapture wrapper class using Read() internally (single thread).
+/// Stage 2 — CameraCapture using Grab()+Retrieve() internally (single thread).
+/// Stage 3 — Stage 2 + MarkerDetector.Detect() called on each frame.
+/// Stage 4 — Stage 3 + DrawDebug overlay drawn on frame before display.
+/// Stage 5 — Stage 4 + GestureRecognizer + WindowsMouseController.
+/// </summary>
 public partial class MainWindow : System.Windows.Window
 {
-    private readonly CameraCapture _camera;
+    private readonly CameraEnumerator _cameraEnumerator;
+    private readonly TrackingSettings _settings;
     private readonly MarkerDetector _detector;
     private readonly MarkerGrouper _grouper;
     private readonly GestureRecognizer _gestureRecognizer;
     private readonly WindowsMouseController _mouseController;
-    private readonly CameraEnumerator _cameraEnumerator;
-    private readonly SettingsService _settingsService;
-    private TrackingSettings _settings;
 
+    private int _activeStage = 0;
     private CancellationTokenSource? _cts;
+
+    // Stage 0 only: raw VideoCapture used directly
+    private VideoCapture? _rawCapture;
+
+    // Stages 1-5: CameraCapture wrapper
+    private CameraCapture? _camCapture;
+
     private readonly Stopwatch _fpsStopwatch = Stopwatch.StartNew();
     private int _frameCount;
-    private bool _loadingSettings;
+    private long _totalFrames;
 
-    // When false, finger movement does NOT control the real mouse.
-    // Instead a virtual cursor is drawn on the preview for testing.
-    private bool _mouseEnabled = false;
-
-    // Virtual cursor position in camera-frame pixels (updated from gesture recognizer)
-    private double _virtualCursorX = -1;
-    private double _virtualCursorY = -1;
+    private static readonly string[] StageDescriptions =
+    {
+        "Stage 0 — VideoCapture.Read() directly in MainWindow. No wrapper. No processing. IDENTICAL to the known-working v0.7.2-diag build.",
+        "Stage 1 — CameraCapture wrapper class using Read() internally (single thread).",
+        "Stage 2 — CameraCapture using Grab()+Retrieve() to drain buffer (single thread).",
+        "Stage 3 — Stage 2 + MarkerDetector.Detect() called on each frame (no overlay).",
+        "Stage 4 — Stage 3 + DrawDebug overlay drawn on frame before display.",
+        "Stage 5 — Full pipeline: detection + gesture recognition + mouse injection.",
+    };
 
     public MainWindow(
-        CameraCapture camera,
+        CameraEnumerator cameraEnumerator,
+        TrackingSettings settings,
         MarkerDetector detector,
         MarkerGrouper grouper,
         GestureRecognizer gestureRecognizer,
-        WindowsMouseController mouseController,
-        CameraEnumerator cameraEnumerator,
-        SettingsService settingsService,
-        TrackingSettings settings)
+        WindowsMouseController mouseController)
     {
-        _camera = camera;
+        _cameraEnumerator = cameraEnumerator;
+        _settings = settings;
         _detector = detector;
         _grouper = grouper;
         _gestureRecognizer = gestureRecognizer;
         _mouseController = mouseController;
-        _cameraEnumerator = cameraEnumerator;
-        _settingsService = settingsService;
-        _settings = settings;
 
         InitializeComponent();
-        Closing += (_, _) => StopTracking();
-
-        SettingsPathLabel.Text = $"Settings: {SettingsService.GetSettingsPath()}";
+        Closing += (_, _) => CloseCamera();
         RefreshCameraList();
-        ApplySettingsToUI();
+        SetStage(0);
     }
-
-    // ── Camera ─────────────────────────────────────────────────────────────
 
     private void RefreshCameraList()
     {
@@ -70,365 +82,231 @@ public partial class MainWindow : System.Windows.Window
         var devices = _cameraEnumerator.Enumerate();
         if (devices.Count == 0)
         {
-            CameraComboBox.Items.Add(new CameraDeviceInfo(-1, "No cameras found"));
+            CameraComboBox.Items.Add("No cameras found");
             CameraComboBox.SelectedIndex = 0;
-            StartButton.IsEnabled = false;
+            OpenButton.IsEnabled = false;
             return;
         }
         foreach (var d in devices) CameraComboBox.Items.Add(d);
         var match = devices.FirstOrDefault(d => d.Index == _settings.CameraDeviceIndex);
         CameraComboBox.SelectedItem = match ?? devices[0];
-        StartButton.IsEnabled = true;
+        OpenButton.IsEnabled = true;
     }
 
     private void RefreshCameras_Click(object sender, RoutedEventArgs e) => RefreshCameraList();
 
-    private void CameraComboBox_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+    private void Stage_Click(object sender, RoutedEventArgs e)
     {
-        if (CameraComboBox.SelectedItem is CameraDeviceInfo d && d.Index >= 0)
+        if (sender is Button btn && int.TryParse(btn.Tag?.ToString(), out int s))
+            SetStage(s);
+    }
+
+    private void SetStage(int stage)
+    {
+        _activeStage = stage;
+        StageDescLabel.Text = StageDescriptions[stage];
+        foreach (var (btn, i) in new[] {
+            (S0Btn,0),(S1Btn,1),(S2Btn,2),(S3Btn,3),(S4Btn,4),(S5Btn,5) })
         {
-            _settings.CameraDeviceIndex = d.Index;
-            _settingsService.Save(_settings);
+            btn.Background = new SolidColorBrush(
+                i == stage ? Color.FromRgb(26,90,160) : Color.FromRgb(60,60,60));
         }
     }
 
-    // ── Mouse Toggle ────────────────────────────────────────────────
-
-    private void MouseToggle_Click(object sender, RoutedEventArgs e)
-    {
-        _mouseEnabled = !_mouseEnabled;
-        if (_mouseEnabled)
-        {
-            MouseToggleButton.Content    = "🖱  Mouse Control: ON";
-            MouseToggleButton.Foreground = (Brush)FindResource("GreenBrush");
-            MouseToggleButton.Background = new SolidColorBrush(Color.FromRgb(26, 70, 26));
-        }
-        else
-        {
-            MouseToggleButton.Content    = "🖱  Mouse Control: OFF (Test Mode)";
-            MouseToggleButton.Foreground = new SolidColorBrush(Color.FromRgb(255, 184, 0));
-            MouseToggleButton.Background = new SolidColorBrush(Color.FromRgb(60, 60, 60));
-            _mouseController.ReleaseAll(); // release any held buttons immediately
-        }
-    }
-
-    // ── Start / Stop ───────────────────────────────────────────────────────
-
-    private void StartButton_Click(object sender, RoutedEventArgs e)
+    private void OpenCamera_Click(object sender, RoutedEventArgs e)
     {
         if (CameraComboBox.SelectedItem is not CameraDeviceInfo device || device.Index < 0)
         {
-            MessageBox.Show("Please select a valid camera device.", "No Camera Selected",
+            MessageBox.Show("Select a camera first.", "No Camera",
                 MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
         _settings.CameraDeviceIndex = device.Index;
-        if (!_camera.Open())
+
+        bool opened = _activeStage == 0
+            ? OpenStage0(device.Index)
+            : OpenStages1to5(device.Index);
+
+        if (!opened)
         {
-            MessageBox.Show($"Failed to open \"{device.Name}\".\nCheck it is connected and not in use.",
+            MessageBox.Show($"Could not open \"{device.Name}\".",
                 "Camera Error", MessageBoxButton.OK, MessageBoxImage.Error);
             return;
         }
 
-        _detector.ResetIdentification();
-        _cts = new CancellationTokenSource();
-        _camera.FrameReady += OnFrameReady;
-        _camera.StartCapture(_cts.Token);
-
-        StartButton.IsEnabled = false;
-        StopButton.IsEnabled = true;
-        CameraComboBox.IsEnabled = false;
-        StatusLabel.Text = "Running";
-        StatusLabel.Foreground = (Brush)FindResource("GreenBrush");
-        IdentifyPill.Visibility = Visibility.Visible;
-        IdentifyLabel.Text = "Identifying...";
-        IdentifyPill.Background = new SolidColorBrush(Color.FromRgb(136, 85, 0));
+        OpenButton.IsEnabled = false;
+        CloseButton.IsEnabled = true;
+        SetPill($"STAGE {_activeStage} RUNNING", Color.FromRgb(0,160,60));
+        _totalFrames = 0;
     }
 
-    private void StopButton_Click(object sender, RoutedEventArgs e) => StopTracking();
+    private void CloseCamera_Click(object sender, RoutedEventArgs e) => CloseCamera();
 
-    private void StopTracking()
+    private void CloseCamera()
     {
         _cts?.Cancel();
-        _camera.FrameReady -= OnFrameReady;
-        _camera.Stop();
-        _mouseController.ReleaseAll();
-        _gestureRecognizer.Reset();
+        _cts = null;
+
+        if (_activeStage == 0)
+        {
+            Thread.Sleep(200);
+            _rawCapture?.Release();
+            _rawCapture?.Dispose();
+            _rawCapture = null;
+        }
+        else
+        {
+            _camCapture?.Stop();
+            _camCapture = null;
+            _mouseController.ReleaseAll();
+            _gestureRecognizer.Reset();
+            _detector.ResetIdentification();
+        }
 
         Dispatcher.InvokeAsync(() =>
         {
-            StartButton.IsEnabled = true;
-            StopButton.IsEnabled = false;
-            CameraComboBox.IsEnabled = true;
-            StatusLabel.Text = "Stopped";
-            StatusLabel.Foreground = (Brush)FindResource("RedBrush");
-            UpdateActivationPill(false);
-            IdentifyPill.Visibility = Visibility.Collapsed;
+            OpenButton.IsEnabled = true;
+            CloseButton.IsEnabled = false;
+            SetPill("STOPPED", Color.FromRgb(180,40,40));
+            BlobCountLabel.Text = "--";
+            MarkerCountLabel.Text = "--";
         });
     }
 
-    // ── Frame Processing ───────────────────────────────────────────────────
+    // ── Stage 0 — exact working diagnostic code ────────────────────────────
+
+    private bool OpenStage0(int index)
+    {
+        _rawCapture = new VideoCapture(index, VideoCaptureAPIs.MSMF);
+        if (!_rawCapture.IsOpened()) { _rawCapture.Dispose(); _rawCapture = null; return false; }
+        _rawCapture.Set(VideoCaptureProperties.FourCC, VideoWriter.FourCC('M','J','P','G'));
+        _rawCapture.Set(VideoCaptureProperties.FrameWidth,  _settings.FrameWidth);
+        _rawCapture.Set(VideoCaptureProperties.FrameHeight, _settings.FrameHeight);
+        _cts = new CancellationTokenSource();
+        Task.Run(() => Stage0Loop(_cts.Token));
+        return true;
+    }
+
+    private void Stage0Loop(CancellationToken ct)
+    {
+        using var frame = new Mat();
+        while (!ct.IsCancellationRequested)
+        {
+            if (_rawCapture == null || !_rawCapture.IsOpened()) break;
+            if (!_rawCapture.Read(frame) || frame.Empty()) { Thread.Sleep(10); continue; }
+            _totalFrames++;
+            _frameCount++;
+            if (_fpsStopwatch.ElapsedMilliseconds < 100) continue;
+            double fps = _frameCount / _fpsStopwatch.Elapsed.TotalSeconds;
+            _frameCount = 0;
+            _fpsStopwatch.Restart();
+            var bmp = MatToBitmapSource(frame); bmp.Freeze();
+            long tot = _totalFrames;
+            Dispatcher.InvokeAsync(() => {
+                PreviewImage.Source = bmp;
+                FpsLabel.Text = $"{fps:F0}";
+                FrameCountLabel.Text = $"{tot}";
+            });
+        }
+    }
+
+    // ── Stages 1-5 — via CameraCapture ────────────────────────────────────
+
+    private bool OpenStages1to5(int index)
+    {
+        // Stage 1: CameraCapture using Read() internally
+        // Stage 2+: CameraCapture using Grab()+Retrieve() internally
+        bool useGrabRetrieve = _activeStage >= 2;
+        _camCapture = new CameraCapture(
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<CameraCapture>.Instance,
+            _settings,
+            useGrabRetrieve);
+
+        if (!_camCapture.Open()) { _camCapture = null; return false; }
+
+        _cts = new CancellationTokenSource();
+        _camCapture.FrameReady += OnFrameReady;
+        _camCapture.StartCapture(_cts.Token);
+        return true;
+    }
 
     private void OnFrameReady(object? sender, Mat frame)
     {
         using (frame)
         {
-            // Always run detection so the slow pass accumulates displacement data
-            var blobs  = _detector.Detect(frame);
-            var groups = _grouper.Group(blobs);
+            _totalFrames++;
+            _frameCount++;
 
-            if (!_detector.IsIdentifying)
+            int blobCount = 0;
+            int markerCount = 0;
+            Mat displayFrame = frame;
+            bool disposeDisplay = false;
+
+            if (_activeStage >= 3)
             {
-                var gesture = _gestureRecognizer.Process(groups);
-                if (_mouseEnabled)
+                var blobs = _detector.Detect(frame);
+                blobCount = blobs.Count;
+                markerCount = _detector.ConfirmedMarkerCount;
+
+                if (_activeStage >= 4)
                 {
-                    _mouseController.Apply(gesture);
+                    displayFrame = _detector.DrawDebug(frame, blobs);
+                    disposeDisplay = true;
                 }
-                else
+
+                if (_activeStage >= 5 && !_detector.IsIdentifying)
                 {
-                    // Test mode: update virtual cursor position from gesture data
-                    // but do not inject any real mouse events.
-                    _mouseController.ReleaseAll();
-                    if (gesture.MouseDelta.DeltaX != 0 || gesture.MouseDelta.DeltaY != 0)
-                    {
-                        _virtualCursorX = Math.Clamp(_virtualCursorX + gesture.MouseDelta.DeltaX, 0, frame.Width  - 1);
-                        _virtualCursorY = Math.Clamp(_virtualCursorY + gesture.MouseDelta.DeltaY, 0, frame.Height - 1);
-                    }
-                    // Initialise virtual cursor to centre if not yet set
-                    if (_virtualCursorX < 0)
-                    {
-                        _virtualCursorX = frame.Width  / 2.0;
-                        _virtualCursorY = frame.Height / 2.0;
-                    }
+                    var groups  = _grouper.Group(blobs);
+                    var gesture = _gestureRecognizer.Process(groups);
+                    _mouseController.Apply(gesture);
                 }
             }
 
-            _frameCount++;
-
-            // Throttle UI updates to ~30fps
-            if (_fpsStopwatch.ElapsedMilliseconds < 33) return;
+            if (_fpsStopwatch.ElapsedMilliseconds < 100)
+            {
+                if (disposeDisplay) displayFrame.Dispose();
+                return;
+            }
 
             double fps = _frameCount / _fpsStopwatch.Elapsed.TotalSeconds;
             _frameCount = 0;
             _fpsStopwatch.Restart();
 
-            // Always draw the debug frame so the preview is never blank.
-            // During identification this shows the raw frame with all bright
-            // blobs highlighted so the user can see what the camera sees.
-            // After identification it shows only confirmed marker windows.
-            // In test mode a virtual cursor crosshair is drawn on the frame.
-            double vcx = _virtualCursorX;
-            double vcy = _virtualCursorY;
-            bool testMode = !_mouseEnabled;
-            using var debugFrame = _detector.DrawDebug(frame, blobs, testMode ? vcx : -1, testMode ? vcy : -1);
-            var bitmap = MatToBitmapSource(debugFrame);
-            bitmap.Freeze();
+            var bmp = MatToBitmapSource(displayFrame); bmp.Freeze();
+            if (disposeDisplay) displayFrame.Dispose();
+            long tot = _totalFrames;
+            int bc = blobCount, mc = markerCount;
 
-            var groupDict    = groups.ToDictionary(g => g.Identity);
-            double pinchDist = _gestureRecognizer.LastActivationDistance;
-            bool mouseActive = _gestureRecognizer.IsMouseActive;
-            bool identifying = _detector.IsIdentifying;
-            int confirmed    = _detector.ConfirmedMarkerCount;
-            int passes       = _detector.SlowPassCount;
-            int blobCount    = blobs.Count;
-
-            Dispatcher.InvokeAsync(() =>
-            {
-                CameraPreviewImage.Source = bitmap;
+            Dispatcher.InvokeAsync(() => {
+                PreviewImage.Source = bmp;
                 FpsLabel.Text = $"{fps:F0}";
-                BlobCountLabel.Text = $"{blobCount}";
-                MarkerCountLabel.Text = $"{confirmed}";
-                PinchDistLabel.Text = pinchDist > 0 ? $"{pinchDist:F0}px" : "--";
-                CalibDistLabel.Text = pinchDist > 0 ? $"{pinchDist:F0} px" : "-- px";
-                UpdateActivationPill(mouseActive);
-                UpdateIdentifyPill(identifying, confirmed);
-                IdentifyStatusLabel.Text = $"Confirmed markers: {confirmed}";
-                IdentifyPassLabel.Text   = $"Identification passes: {passes}";
-                UpdateFingerStatus(groupDict);
+                FrameCountLabel.Text = $"{tot}";
+                BlobCountLabel.Text = bc > 0 ? $"{bc}" : "--";
+                MarkerCountLabel.Text = mc > 0 ? $"{mc}" : "--";
             });
         }
     }
 
-    // ── Re-identify ────────────────────────────────────────────────────────
-
-    private void ReIdentify_Click(object sender, RoutedEventArgs e)
+    private void SetPill(string text, Color color)
     {
-        _detector.ResetIdentification();
-        _gestureRecognizer.Reset();
-        IdentifyPill.Visibility = Visibility.Visible;
-        IdentifyLabel.Text = "Identifying...";
-        IdentifyPill.Background = new SolidColorBrush(Color.FromRgb(136, 85, 0));
-    }
-
-    // ── Activation Calibration ─────────────────────────────────────────────
-
-    private void CalibrateActivation_Click(object sender, RoutedEventArgs e)
-    {
-        double dist = _gestureRecognizer.LastActivationDistance;
-        if (dist <= 0)
-        {
-            MessageBox.Show(
-                "Left hand markers are not currently detected.\n\nStart tracking and position your left thumb and index finger before calibrating.",
-                "Calibration Failed", MessageBoxButton.OK, MessageBoxImage.Warning);
-            return;
-        }
-        _gestureRecognizer.CalibrateActivation();
-        _settings.ActivationThresholdPixels = dist;
-        _settingsService.Save(_settings);
-        CalibThreshLabel.Text = $"{dist:F0} px";
-        MessageBox.Show(
-            $"Activation threshold set to {dist:F0} px.\n\nSpread your fingers beyond this distance to activate the mouse.",
-            "Calibration Saved", MessageBoxButton.OK, MessageBoxImage.Information);
-    }
-
-    // ── Settings ───────────────────────────────────────────────────────────
-
-    private void ApplySettingsToUI()
-    {
-        _loadingSettings = true;
-        try
-        {
-            ThresholdSlider.Value        = _settings.BrightnessThreshold;
-            SensitivitySlider.Value      = _settings.MouseSensitivity;
-            HysteresisSlider.Value       = _settings.ActivationHysteresisPixels;
-            IdentifyIntervalSlider.Value = _settings.IdentifyInterval;
-            MoveThreshSlider.Value       = _settings.IdentifyMovementThresholdPx;
-
-            ThresholdLabel.Text        = $"{_settings.BrightnessThreshold}";
-            SensitivityLabel.Text      = $"{_settings.MouseSensitivity:F1}";
-            HysteresisLabel.Text       = $"{(int)_settings.ActivationHysteresisPixels}";
-            IdentifyIntervalLabel.Text = $"{_settings.IdentifyInterval}";
-            MoveThreshLabel.Text       = $"{_settings.IdentifyMovementThresholdPx:F0}";
-
-            CalibThreshLabel.Text = _settings.ActivationThresholdPixels > 0
-                ? $"{_settings.ActivationThresholdPixels:F0} px"
-                : "Not set";
-        }
-        finally { _loadingSettings = false; }
-    }
-
-    private void ResetDefaults_Click(object sender, RoutedEventArgs e)
-    {
-        if (MessageBox.Show(
-                "Reset all settings to factory defaults?\n\nThis will clear your camera selection, calibration, and all slider values.",
-                "Reset to Defaults", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes)
-            return;
-
-        _settingsService.Reset();
-        _settings = new TrackingSettings();
-        _detector.ResetIdentification();
-        _gestureRecognizer.Reset();
-        ApplySettingsToUI();
-        RefreshCameraList();
-        CalibThreshLabel.Text = "Not set";
-    }
-
-    // ── Slider Handlers ────────────────────────────────────────────────────
-
-    private void ThresholdSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
-    {
-        if (_settings == null || _loadingSettings) return;
-        _settings.BrightnessThreshold = (int)e.NewValue;
-        if (ThresholdLabel != null) ThresholdLabel.Text = $"{(int)e.NewValue}";
-        _settingsService.Save(_settings);
-    }
-
-    private void SensitivitySlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
-    {
-        if (_settings == null || _loadingSettings) return;
-        _settings.MouseSensitivity = e.NewValue;
-        if (SensitivityLabel != null) SensitivityLabel.Text = $"{e.NewValue:F1}";
-        _settingsService.Save(_settings);
-    }
-
-    private void HysteresisSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
-    {
-        if (_settings == null || _loadingSettings) return;
-        _settings.ActivationHysteresisPixels = e.NewValue;
-        if (HysteresisLabel != null) HysteresisLabel.Text = $"{(int)e.NewValue}";
-        _settingsService.Save(_settings);
-    }
-
-    private void IdentifyIntervalSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
-    {
-        if (_settings == null || _loadingSettings) return;
-        _settings.IdentifyInterval = (int)e.NewValue;
-        if (IdentifyIntervalLabel != null) IdentifyIntervalLabel.Text = $"{(int)e.NewValue}";
-        _settingsService.Save(_settings);
-    }
-
-    private void MoveThreshSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
-    {
-        if (_settings == null || _loadingSettings) return;
-        _settings.IdentifyMovementThresholdPx = e.NewValue;
-        if (MoveThreshLabel != null) MoveThreshLabel.Text = $"{e.NewValue:F0}";
-        _settingsService.Save(_settings);
-    }
-
-    // ── UI Helpers ─────────────────────────────────────────────────────────
-
-    private void UpdateActivationPill(bool active)
-    {
-        ActivationPill.Background = active
-            ? (Brush)FindResource("GreenBrush")
-            : (Brush)FindResource("RedBrush");
-        ActivationLabel.Text = active ? "MOUSE ON" : "MOUSE OFF";
-    }
-
-    private void UpdateIdentifyPill(bool identifying, int confirmed)
-    {
-        if (identifying)
-        {
-            IdentifyPill.Background = new SolidColorBrush(Color.FromRgb(136, 85, 0));
-            IdentifyLabel.Text = "Identifying...";
-        }
-        else
-        {
-            IdentifyPill.Background = (Brush)FindResource("GreenBrush");
-            IdentifyLabel.Text = $"{confirmed} markers";
-        }
-        IdentifyPill.Visibility = Visibility.Visible;
-    }
-
-    private void UpdateFingerStatus(Dictionary<FingerIdentity, MarkerGroup> groups)
-    {
-        var green  = (Brush)FindResource("GreenBrush");
-        var yellow = new SolidColorBrush(Color.FromRgb(255, 200, 0));
-        var red    = (Brush)FindResource("RedBrush");
-        SetFingerStatus(LeftThumbStatus,   groups, FingerIdentity.LeftThumb,   green, yellow, red);
-        SetFingerStatus(LeftIndexStatus,   groups, FingerIdentity.LeftIndex,   green, yellow, red);
-        SetFingerStatus(RightIndexStatus,  groups, FingerIdentity.RightIndex,  green, yellow, red);
-        SetFingerStatus(RightMiddleStatus, groups, FingerIdentity.RightMiddle, green, yellow, red);
-    }
-
-    private static void SetFingerStatus(
-        System.Windows.Controls.TextBlock label,
-        Dictionary<FingerIdentity, MarkerGroup> groups,
-        FingerIdentity identity,
-        Brush green, Brush yellow, Brush red)
-    {
-        if (groups.TryGetValue(identity, out var group))
-        {
-            int v = group.VisibleCount, m = MarkerGroup.MaxMarkerCount(identity);
-            label.Text       = $"{v}/{m}";
-            label.Foreground = v >= m ? green : yellow;
-        }
-        else
-        {
-            label.Text       = "Lost";
-            label.Foreground = red;
-        }
+        StatusPill.Background = new SolidColorBrush(color);
+        StatusPillLabel.Text = text;
     }
 
     private static BitmapSource MatToBitmapSource(Mat mat)
     {
         Mat bgr = mat; bool nd = false;
-        if (mat.Channels() == 1) { bgr = new Mat(); Cv2.CvtColor(mat, bgr, ColorConversionCodes.GRAY2BGR); nd = true; }
-        int w = bgr.Width, h = bgr.Height, s = (int)bgr.Step();
-        var px = new byte[s * h];
+        if (mat.Channels() == 1)
+        {
+            bgr = new Mat();
+            Cv2.CvtColor(mat, bgr, ColorConversionCodes.GRAY2BGR);
+            nd = true;
+        }
+        int w = bgr.Width, h = bgr.Height, stride = (int)bgr.Step();
+        var px = new byte[stride * h];
         Marshal.Copy(bgr.Data, px, 0, px.Length);
         var bmp = new WriteableBitmap(w, h, 96, 96, PixelFormats.Bgr24, null);
-        bmp.WritePixels(new Int32Rect(0, 0, w, h), px, s, 0);
+        bmp.WritePixels(new Int32Rect(0, 0, w, h), px, stride, 0);
         if (nd) bgr.Dispose();
         return bmp;
     }
