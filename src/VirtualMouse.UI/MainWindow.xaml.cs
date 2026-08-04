@@ -176,18 +176,22 @@ public partial class MainWindow : System.Windows.Window
 
     private void ThresholdSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
     {
+        // Guard: XAML fires ValueChanged during InitializeComponent() before _settings is injected
+        if (_settings == null) return;
         _settings.BrightnessThreshold = (int)e.NewValue;
         if (ThresholdLabel != null) ThresholdLabel.Text = $"{(int)e.NewValue}";
     }
 
     private void SensitivitySlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
     {
+        if (_settings == null) return;
         _settings.MouseSensitivity = e.NewValue;
         if (SensitivityLabel != null) SensitivityLabel.Text = $"{e.NewValue:F1}";
     }
 
     private void PinchSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
     {
+        if (_settings == null) return;
         _settings.PinchThresholdPixels = e.NewValue;
         if (PinchLabel != null) PinchLabel.Text = $"{(int)e.NewValue}";
     }
