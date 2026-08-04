@@ -56,7 +56,11 @@
                 <Button x:Name="StartButton" Content="▶  Open Camera"
                         Background="#1E90FF" Foreground="White" FontWeight="Bold"
                         Padding="8,6" Margin="0,4,0,4" Click="StartButton_Click"/>
-                <Button x:Name="StopButton" Content="■  Close Camera"
+                <Button x:Name="ResetUsbButton" Content="⚡  Reset USB Port"
+                        Background="#7B3F00" Foreground="White" FontWeight="Bold"
+                        Padding="8,6" Margin="0,4,0,0" Click="ResetUsb_Click"
+                        ToolTip="Restart the camera USB device via pnputil (requires Admin)"/>
+                <Button x:Name="StopButton" Content="■  Stop Tracking"
                         Background="#555" Foreground="White" Padding="8,6"
                         IsEnabled="False" Click="StopButton_Click"/>
 

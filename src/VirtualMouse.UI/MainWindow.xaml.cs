@@ -11,8 +11,13 @@ namespace VirtualMouse.UI;
 
 /// <summary>
 /// DIAGNOSTIC MODE — pure camera viewer.
-/// Opens the camera and displays raw frames. No detection, no processing,
-/// no gesture recognition, no mouse injection. Nothing.
+/// Opens the camera and displays raw frames. No detection, no processing.
+///
+/// Teardown sequence (critical for OV9281 / MSMF):
+///   1. Set _stopRequested = true  → CaptureLoop exits its while-loop naturally
+///   2. Wait for _captureTask to complete (Read() has returned, loop has exited)
+///   3. ONLY THEN call Release() + Dispose()
+///   This guarantees no race between Read() and Release().
 /// </summary>
 public partial class MainWindow : System.Windows.Window
 {
@@ -20,7 +25,9 @@ public partial class MainWindow : System.Windows.Window
     private readonly TrackingSettings _settings;
 
     private VideoCapture? _capture;
-    private CancellationTokenSource? _cts;
+    private Task? _captureTask;
+    private volatile bool _stopRequested;
+
     private readonly Stopwatch _fpsStopwatch = Stopwatch.StartNew();
     private int _frameCount;
     private long _totalFrames;
@@ -57,13 +64,11 @@ public partial class MainWindow : System.Windows.Window
     {
         if (CameraComboBox.SelectedItem is not CameraDeviceInfo device || device.Index < 0)
         {
-            MessageBox.Show("Select a camera first.", "No Camera", MessageBoxButton.OK, MessageBoxImage.Warning);
+            MessageBox.Show("Select a camera first.", "No Camera",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
 
-        // Open the camera — resolution only, nothing else
-        // ArduCam documentation explicitly recommends CAP_MSMF (Windows Media Foundation)
-        // over CAP_DSHOW for this camera. DSHOW causes low FPS and black frames.
         _capture = new VideoCapture(device.Index, VideoCaptureAPIs.MSMF);
         if (!_capture.IsOpened())
         {
@@ -74,72 +79,109 @@ public partial class MainWindow : System.Windows.Window
             return;
         }
 
-        // Request MJPEG format — the OV9281 natively outputs MJPEG and YUV2.
-        // Without this, OpenCV's DirectShow backend requests BGR24 by default,
-        // which the camera cannot deliver. The failed format negotiation leaves
-        // the camera firmware in a stuck state that produces black frames until
-        // the USB cable is physically unplugged.
-        // Setting FourCC to MJPG forces DirectShow to negotiate MJPEG, which
-        // the camera supports. OpenCV decodes it to BGR internally.
-        _capture.Set(VideoCaptureProperties.FourCC,
-            VideoWriter.FourCC('M', 'J', 'P', 'G'));
+        _capture.Set(VideoCaptureProperties.FourCC, VideoWriter.FourCC('M','J','P','G'));
         _capture.Set(VideoCaptureProperties.FrameWidth,  _settings.FrameWidth);
         _capture.Set(VideoCaptureProperties.FrameHeight, _settings.FrameHeight);
 
-        _totalFrames = 0;
-        _cts = new CancellationTokenSource();
-        Task.Run(() => CaptureLoop(_cts.Token));
+        _stopRequested = false;
+        _totalFrames   = 0;
+        _captureTask   = Task.Run(CaptureLoop);
 
-        StartButton.IsEnabled = false;
-        StopButton.IsEnabled = true;
+        StartButton.IsEnabled    = false;
+        StopButton.IsEnabled     = true;
         CameraComboBox.IsEnabled = false;
-        StatusLabel.Text = "Running";
-        StatusLabel.Foreground = new SolidColorBrush(Color.FromRgb(0, 204, 68));
+        StatusLabel.Text         = "Running";
+        StatusLabel.Foreground   = new SolidColorBrush(Color.FromRgb(0, 204, 68));
     }
 
     private void StopButton_Click(object sender, RoutedEventArgs e)
     {
-        // Disable button immediately — prevent double-click
-        StopButton.IsEnabled = false;
-        StatusLabel.Text = "Stopping...";
+        StopButton.IsEnabled   = false;
+        StatusLabel.Text       = "Stopping...";
+        StatusLabel.Foreground = new SolidColorBrush(Color.FromRgb(200, 140, 0));
 
-        // Run teardown on a background thread — NEVER block the UI thread.
-        // Release the capture FIRST so the blocking Read() call in CaptureLoop
-        // returns immediately, then wait for the loop to exit cleanly.
-        var cts = _cts;
-        var cap = _capture;
-        _cts = null;
-        _capture = null;
+        // Capture references before clearing fields
+        var cap  = _capture;
+        var task = _captureTask;
+        _capture     = null;
+        _captureTask = null;
 
         Task.Run(() =>
         {
-            cts?.Cancel();
-            // Release before waiting — this unblocks Read() on the capture thread
+            // Step 1: signal the loop to stop
+            _stopRequested = true;
+
+            // Step 2: wait for CaptureLoop to fully exit
+            // Read() will return false/empty once we set _stopRequested and
+            // the loop checks the flag. We wait up to 2 seconds.
+            task?.Wait(TimeSpan.FromSeconds(2));
+
+            // Step 3: NOW it is safe to release — Read() has returned
             try { cap?.Release(); } catch { }
             try { cap?.Dispose(); } catch { }
-            // Small wait for the loop to notice cancellation and exit
-            Thread.Sleep(300);
 
             Dispatcher.InvokeAsync(() =>
             {
-                StartButton.IsEnabled = true;
-                StopButton.IsEnabled = false;
+                StartButton.IsEnabled    = true;
+                StopButton.IsEnabled     = false;
                 CameraComboBox.IsEnabled = true;
-                StatusLabel.Text = "Stopped";
-                StatusLabel.Foreground = new SolidColorBrush(Color.FromRgb(204, 51, 51));
+                StatusLabel.Text         = "Stopped";
+                StatusLabel.Foreground   = new SolidColorBrush(Color.FromRgb(204, 51, 51));
             });
         });
     }
 
-    private void CaptureLoop(CancellationToken ct)
+    private void ResetUsb_Click(object sender, RoutedEventArgs e)
+    {
+        // Use pnputil to restart the camera device without unplugging.
+        // This resets the USB port state that our app may have left dirty.
+        StatusLabel.Text       = "Resetting USB...";
+        StatusLabel.Foreground = new SolidColorBrush(Color.FromRgb(200, 140, 0));
+
+        Task.Run(() =>
+        {
+            try
+            {
+                // Find the hardware ID of the ArduCam / UVC device and restart it
+                var psi = new ProcessStartInfo("pnputil",
+                    "/restart-device \"USB\\VID_0C45*\" /subtree")
+                {
+                    UseShellExecute        = true,
+                    Verb                   = "runas",   // requires admin
+                    CreateNoWindow         = true,
+                    WindowStyle            = ProcessWindowStyle.Hidden
+                };
+                var proc = Process.Start(psi);
+                proc?.WaitForExit(5000);
+            }
+            catch (Exception ex)
+            {
+                Dispatcher.InvokeAsync(() =>
+                    MessageBox.Show($"USB reset failed:\n{ex.Message}\n\nTry running as Administrator.",
+                        "Reset Failed", MessageBoxButton.OK, MessageBoxImage.Warning));
+            }
+
+            Thread.Sleep(2000); // wait for re-enumeration
+
+            Dispatcher.InvokeAsync(() =>
+            {
+                StatusLabel.Text       = "Stopped";
+                StatusLabel.Foreground = new SolidColorBrush(Color.FromRgb(204, 51, 51));
+                RefreshCameraList();
+            });
+        });
+    }
+
+    private void CaptureLoop()
     {
         using var frame = new Mat();
 
-        while (!ct.IsCancellationRequested)
+        while (!_stopRequested)
         {
-            if (_capture == null || !_capture.IsOpened()) break;
+            var cap = _capture;
+            if (cap == null || !cap.IsOpened()) break;
 
-            if (!_capture.Read(frame) || frame.Empty())
+            if (!cap.Read(frame) || frame.Empty())
             {
                 Thread.Sleep(10);
                 continue;
@@ -148,7 +190,6 @@ public partial class MainWindow : System.Windows.Window
             _totalFrames++;
             _frameCount++;
 
-            // Update UI at ~10fps to avoid overwhelming the dispatcher
             if (_fpsStopwatch.ElapsedMilliseconds < 100) continue;
 
             double fps = _frameCount / _fpsStopwatch.Elapsed.TotalSeconds;
@@ -161,29 +202,29 @@ public partial class MainWindow : System.Windows.Window
 
             Dispatcher.InvokeAsync(() =>
             {
-                PreviewImage.Source = bitmap;
-                FpsLabel.Text = $"{fps:F0}";
-                FrameCountLabel.Text = $"{total}";
+                PreviewImage.Source    = bitmap;
+                FpsLabel.Text          = $"{fps:F0}";
+                FrameCountLabel.Text   = $"{total}";
             });
         }
     }
 
     private static BitmapSource MatToBitmapSource(Mat mat)
     {
-        Mat bgr = mat;
-        bool dispose = false;
+        Mat bgr    = mat;
+        bool nd    = false;
         if (mat.Channels() == 1)
         {
             bgr = new Mat();
             Cv2.CvtColor(mat, bgr, ColorConversionCodes.GRAY2BGR);
-            dispose = true;
+            nd = true;
         }
         int w = bgr.Width, h = bgr.Height, stride = (int)bgr.Step();
-        var pixels = new byte[stride * h];
-        Marshal.Copy(bgr.Data, pixels, 0, pixels.Length);
+        var px = new byte[stride * h];
+        Marshal.Copy(bgr.Data, px, 0, px.Length);
         var bmp = new WriteableBitmap(w, h, 96, 96, PixelFormats.Bgr24, null);
-        bmp.WritePixels(new Int32Rect(0, 0, w, h), pixels, stride, 0);
-        if (dispose) bgr.Dispose();
+        bmp.WritePixels(new Int32Rect(0, 0, w, h), px, stride, 0);
+        if (nd) bgr.Dispose();
         return bmp;
     }
 }
