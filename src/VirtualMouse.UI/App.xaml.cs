@@ -53,6 +53,7 @@ public partial class App : Application
             services.AddSingleton<GestureRecognizer>();
 
             // Vision
+            services.AddSingleton<UsbDeviceResetter>();
             services.AddSingleton<CameraCapture>();
             services.AddSingleton<MarkerDetector>();
             services.AddSingleton<CameraEnumerator>();

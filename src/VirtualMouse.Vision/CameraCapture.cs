@@ -5,55 +5,67 @@ using Microsoft.Extensions.Logging;
 namespace VirtualMouse.Vision;
 
 /// <summary>
-/// Manages camera capture with a two-thread design to prevent buffer backlog.
+/// Manages camera capture with automatic device reset on open and a two-thread
+/// design to prevent buffer backlog.
 ///
-/// THE PROBLEM:
-/// DirectShow (and most UVC drivers) maintain an internal ring buffer of
-/// decoded frames. The OV9281 at 120fps produces a new frame every ~8ms.
-/// If the application reads frames slower than that (because each frame
-/// goes through detection, grouping, gesture logic, and WPF rendering),
-/// frames pile up in the buffer. The application then reads them in order,
-/// playing back stale frames — this is the "slow motion" effect.
+/// AUTO-RESET ON OPEN:
+///   Before opening the VideoCapture, the UsbDeviceResetter disables and
+///   re-enables the camera device via SetupAPI. This forces the USB stack to
+///   fully reinitialise the sensor, clearing any stale state from a previous
+///   session. The black-screen problem (sensor stuck in a bad state after
+///   repeated open/close cycles) is eliminated.
 ///
-/// THE FIX — two-thread design:
+/// TWO-THREAD DESIGN (prevents slow-motion buffer backlog):
+///   GRAB THREAD: drains the DirectShow buffer at full camera speed,
+///     keeping only the latest frame in a slot.
+///   PROCESS THREAD: picks up the latest frame and raises FrameReady.
 ///
-///   GRAB THREAD (runs as fast as the camera produces frames):
-///     Calls VideoCapture.Read() in a tight loop, discarding every frame
-///     except the most recent. This drains the DirectShow buffer continuously
-///     so it never fills up. The latest frame is stored in a volatile slot.
-///
-///   PROCESS THREAD (runs at the pipeline's natural speed):
-///     Picks up the latest frame from the slot, clones it, and raises
-///     FrameReady. If no new frame has arrived since the last pick-up,
-///     it waits briefly and tries again. The pipeline always sees the
-///     current frame, never a stale one.
+/// TEARDOWN:
+///   Stop() signals both threads to exit and waits up to 2s for the grab
+///   thread to finish its current Read() call before disposing VideoCapture.
+///   This prevents the driver from being left in a corrupt state.
 /// </summary>
 public sealed class CameraCapture : IDisposable
 {
     private readonly ILogger<CameraCapture> _logger;
     private readonly TrackingSettings _settings;
-    private VideoCapture? _capture;
-    private bool _isRunning;
+    private readonly UsbDeviceResetter _resetter;
 
-    // Latest-frame slot — grab thread writes, process thread reads
+    private VideoCapture? _capture;
+    private volatile bool _isRunning;
+    private Task? _grabTask;
+    private Task? _processTask;
+
+    // Latest-frame slot
     private Mat? _latestFrame;
     private readonly object _frameLock = new();
-    private long _frameSerial;      // incremented by grab thread on each new frame
-    private long _lastProcessed;    // last serial seen by process thread
+    private long _frameSerial;
+    private long _lastProcessed;
 
     public event EventHandler<Mat>? FrameReady;
     public bool IsOpen => _capture?.IsOpened() ?? false;
 
-    public CameraCapture(ILogger<CameraCapture> logger, TrackingSettings settings)
+    public CameraCapture(
+        ILogger<CameraCapture> logger,
+        TrackingSettings settings,
+        UsbDeviceResetter resetter)
     {
         _logger = logger;
         _settings = settings;
+        _resetter = resetter;
     }
 
     public bool Open()
     {
         try
         {
+            // ── Step 1: Reset the device before opening ────────────────────
+            // This clears any stale sensor state from previous sessions.
+            // The resetter finds the camera by name fragment from settings.
+            _logger.LogInformation("Resetting camera device before open...");
+            _resetter.ResetCamera(_settings.CameraResetNameFilter);
+
+            // ── Step 2: Open VideoCapture ──────────────────────────────────
             _capture = new VideoCapture(_settings.CameraDeviceIndex, VideoCaptureAPIs.DSHOW);
             if (!_capture.IsOpened())
             {
@@ -61,14 +73,13 @@ public sealed class CameraCapture : IDisposable
                 return false;
             }
 
+            // Minimise internal buffer to 1 frame
+            _capture.Set(VideoCaptureProperties.BufferSize, 1);
+
             _capture.Set(VideoCaptureProperties.FrameWidth,  _settings.FrameWidth);
             _capture.Set(VideoCaptureProperties.FrameHeight, _settings.FrameHeight);
             _capture.Set(VideoCaptureProperties.Fps,         _settings.TargetFps);
             _capture.Set(VideoCaptureProperties.ConvertRgb,  0);
-
-            // Minimise the internal DirectShow buffer to 1 frame so the grab
-            // thread always gets the freshest frame with minimal latency.
-            _capture.Set(VideoCaptureProperties.BufferSize, 1);
 
             TrySet(VideoCaptureProperties.Brightness,        _settings.CamBrightness);
             TrySet(VideoCaptureProperties.Contrast,          _settings.CamContrast);
@@ -76,7 +87,7 @@ public sealed class CameraCapture : IDisposable
             TrySet(VideoCaptureProperties.Sharpness,         _settings.CamSharpness);
             TrySet(VideoCaptureProperties.Gamma,             _settings.CamGamma);
             TrySet(VideoCaptureProperties.WhiteBalanceBlueU, _settings.CamWhiteBalance);
-            TrySet((VideoCaptureProperties)8,                _settings.CamBacklightComp); // BacklightComp
+            TrySet((VideoCaptureProperties)8,                _settings.CamBacklightComp);
             TrySet(VideoCaptureProperties.Gain,              _settings.CamGain);
 
             var w   = _capture.Get(VideoCaptureProperties.FrameWidth);
@@ -102,14 +113,11 @@ public sealed class CameraCapture : IDisposable
     {
         if (!IsOpen) throw new InvalidOperationException("Camera not open.");
         _isRunning = true;
-        _frameSerial = 0;
+        _frameSerial   = 0;
         _lastProcessed = -1;
 
-        // Grab thread — drains the camera buffer at full speed
-        Task.Run(() => GrabLoop(cancellationToken), cancellationToken);
-
-        // Process thread — picks up the latest frame and raises FrameReady
-        Task.Run(() => ProcessLoop(cancellationToken), cancellationToken);
+        _grabTask    = Task.Run(() => GrabLoop(cancellationToken),    cancellationToken);
+        _processTask = Task.Run(() => ProcessLoop(cancellationToken), cancellationToken);
     }
 
     // ── Grab thread ────────────────────────────────────────────────────────
@@ -124,8 +132,6 @@ public sealed class CameraCapture : IDisposable
                 Thread.Sleep(1);
                 continue;
             }
-
-            // Swap the latest frame slot (clone once, discard old)
             var cloned = frame.Clone();
             Mat? old;
             lock (_frameLock)
@@ -136,7 +142,7 @@ public sealed class CameraCapture : IDisposable
             }
             old?.Dispose();
         }
-        _logger.LogDebug("Grab thread stopped.");
+        _logger.LogDebug("Grab thread exited.");
     }
 
     // ── Process thread ─────────────────────────────────────────────────────
@@ -148,35 +154,54 @@ public sealed class CameraCapture : IDisposable
             long serial = Interlocked.Read(ref _frameSerial);
             if (serial == _lastProcessed)
             {
-                // No new frame yet — yield briefly
                 Thread.Sleep(1);
                 continue;
             }
-
             Mat? toProcess;
             lock (_frameLock)
             {
                 toProcess = _latestFrame?.Clone();
                 _lastProcessed = serial;
             }
-
             if (toProcess != null)
                 FrameReady?.Invoke(this, toProcess);
         }
-        _logger.LogDebug("Process thread stopped.");
+        _logger.LogDebug("Process thread exited.");
     }
 
-    public void Stop() => _isRunning = false;
+    // ── Stop / Dispose ─────────────────────────────────────────────────────
 
-    public void Dispose()
+    public void Stop()
     {
         _isRunning = false;
+
+        // Wait for the grab thread to finish its current Read() call before
+        // disposing VideoCapture. Without this wait, the driver can be left
+        // in a corrupt state, causing the black-screen problem on next open.
+        try
+        {
+            Task.WhenAll(
+                _grabTask    ?? Task.CompletedTask,
+                _processTask ?? Task.CompletedTask)
+                .Wait(TimeSpan.FromSeconds(2));
+        }
+        catch { /* timeout is acceptable — we tried */ }
+
         lock (_frameLock)
         {
             _latestFrame?.Dispose();
             _latestFrame = null;
         }
+
+        _capture?.Release();
         _capture?.Dispose();
         _capture = null;
+
+        _logger.LogInformation("Camera stopped and released.");
+    }
+
+    public void Dispose()
+    {
+        Stop();
     }
 }
