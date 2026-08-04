@@ -1,6 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using System.Windows;
+using System.Windows.Threading;
 using VirtualMouse.Core;
 using VirtualMouse.Input;
 using VirtualMouse.Vision;
@@ -13,44 +14,68 @@ public partial class App : Application
 
     protected override void OnStartup(StartupEventArgs e)
     {
+        // Catch any unhandled exception on the UI thread and show it
+        // instead of silently crashing.
+        DispatcherUnhandledException += (_, ex) =>
+        {
+            MessageBox.Show(
+                $"Unhandled exception:\n\n{ex.Exception}",
+                "Virtual Mouse — Fatal Error",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+            ex.Handled = true;
+            Shutdown(1);
+        };
+
         base.OnStartup(e);
 
-        var services = new ServiceCollection();
-
-        // Logging
-        services.AddLogging(builder =>
+        try
         {
-            builder.AddConsole();
-            builder.SetMinimumLevel(LogLevel.Debug);
-        });
+            var services = new ServiceCollection();
 
-        // Configuration (default settings; will be overridden by calibration)
-        services.AddSingleton<TrackingSettings>();
+            // Logging
+            services.AddLogging(builder =>
+            {
+                builder.AddConsole();
+                builder.SetMinimumLevel(LogLevel.Debug);
+            });
 
-        // Core
-        services.AddSingleton<MarkerGrouper>();
-        services.AddSingleton<GestureRecognizer>();
+            // Configuration (default settings; overridden by calibration UI)
+            services.AddSingleton<TrackingSettings>();
 
-        // Vision
-        services.AddSingleton<CameraCapture>();
-        services.AddSingleton<MarkerDetector>();
+            // Core
+            services.AddSingleton<MarkerGrouper>();
+            services.AddSingleton<GestureRecognizer>();
 
-        // Input
-        services.AddSingleton<WindowsMouseController>();
+            // Vision
+            services.AddSingleton<CameraCapture>();
+            services.AddSingleton<MarkerDetector>();
 
-        // UI
-        services.AddSingleton<MainWindow>();
+            // Input
+            services.AddSingleton<WindowsMouseController>();
 
-        Services = services.BuildServiceProvider();
+            // UI — registered last so all dependencies are available
+            services.AddSingleton<MainWindow>();
 
-        var mainWindow = Services.GetRequiredService<MainWindow>();
-        mainWindow.Show();
+            Services = services.BuildServiceProvider();
+
+            var mainWindow = Services.GetRequiredService<MainWindow>();
+            mainWindow.Show();
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(
+                $"Startup failed:\n\n{ex}",
+                "Virtual Mouse — Startup Error",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+            Shutdown(1);
+        }
     }
 
     protected override void OnExit(ExitEventArgs e)
     {
-        // Ensure mouse buttons are released on exit
-        Services.GetService<WindowsMouseController>()?.ReleaseAll();
+        Services?.GetService<WindowsMouseController>()?.ReleaseAll();
         base.OnExit(e);
     }
 }

@@ -1,7 +1,9 @@
 <Application x:Class="VirtualMouse.UI.App"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             StartupUri="MainWindow.xaml">
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <!-- StartupUri is intentionally omitted. The main window is created and shown
+         via dependency injection in App.xaml.cs OnStartup(), which allows
+         MainWindow to receive its constructor dependencies from the DI container. -->
     <Application.Resources>
         <!-- Dark theme base -->
         <SolidColorBrush x:Key="BackgroundBrush" Color="#1E1E1E"/>
