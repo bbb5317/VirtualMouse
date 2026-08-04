@@ -1,8 +1,8 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using System.Windows;
+using System.Windows.Threading;
 using VirtualMouse.Core;
-using VirtualMouse.Input;
 using VirtualMouse.Vision;
 
 namespace VirtualMouse.UI;
@@ -15,8 +15,11 @@ public partial class App : Application
     {
         DispatcherUnhandledException += (_, ex) =>
         {
-            MessageBox.Show($"Unhandled exception:\n\n{ex.Exception}",
-                "Virtual Mouse — Fatal Error", MessageBoxButton.OK, MessageBoxImage.Error);
+            MessageBox.Show(
+                $"Unhandled exception:\n\n{ex.Exception}",
+                "Virtual Mouse — Fatal Error",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
             ex.Handled = true;
             Shutdown(1);
         };
@@ -26,30 +29,35 @@ public partial class App : Application
         try
         {
             var services = new ServiceCollection();
-            services.AddLogging(b => { b.AddConsole(); b.SetMinimumLevel(LogLevel.Debug); });
+
+            services.AddLogging(b =>
+            {
+                b.AddConsole();
+                b.SetMinimumLevel(LogLevel.Debug);
+            });
+
+            // Settings (needed for camera index + resolution)
             services.AddSingleton<SettingsService>();
             services.AddSingleton<TrackingSettings>(sp =>
                 sp.GetRequiredService<SettingsService>().Load());
+
+            // Camera enumeration
             services.AddSingleton<CameraEnumerator>();
-            services.AddSingleton<MarkerDetector>();
-            services.AddSingleton<MarkerGrouper>();
-            services.AddSingleton<GestureRecognizer>();
-            services.AddSingleton<WindowsMouseController>();
+
+            // Minimal window — no detection, no gesture, no mouse
             services.AddSingleton<MainWindow>();
+
             Services = services.BuildServiceProvider();
             Services.GetRequiredService<MainWindow>().Show();
         }
         catch (Exception ex)
         {
-            MessageBox.Show($"Startup failed:\n\n{ex}",
-                "Virtual Mouse — Startup Error", MessageBoxButton.OK, MessageBoxImage.Error);
+            MessageBox.Show(
+                $"Startup failed:\n\n{ex}",
+                "Virtual Mouse — Startup Error",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
             Shutdown(1);
         }
-    }
-
-    protected override void OnExit(ExitEventArgs e)
-    {
-        Services?.GetService<WindowsMouseController>()?.ReleaseAll();
-        base.OnExit(e);
     }
 }

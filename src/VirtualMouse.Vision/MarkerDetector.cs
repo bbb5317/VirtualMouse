@@ -62,18 +62,9 @@ public class MarkerDetector : IDisposable
 
     private const int FastWindowRadius = 30; // px in full-res coords to search around each marker
 
-    // Minimum number of slow passes required before identification is considered complete.
-    // We need at least 2 passes to measure displacement (pass 1 = baseline, pass 2 = compare).
-    private const int MinSlowPassesRequired = 3;
-
     // ── Public state ───────────────────────────────────────────────────────
 
-    /// <summary>
-    /// True while the system is still learning which blobs are markers.
-    /// Requires at least MinSlowPassesRequired slow passes AND at least one
-    /// confirmed marker to be found before identification is considered done.
-    /// </summary>
-    public bool IsIdentifying => SlowPassCount < MinSlowPassesRequired || _confirmedMarkers.Length == 0;
+    public bool IsIdentifying => _framesSeen < _settings.IdentifyFrames;
 
     // ── Constructor ────────────────────────────────────────────────────────
 
@@ -231,79 +222,34 @@ public class MarkerDetector : IDisposable
 
     // ── Debug Visualisation ────────────────────────────────────────────────
 
-    public Mat DrawDebug(Mat frame, IReadOnlyList<MarkerBlob> blobs,
-        double virtualCursorX = -1, double virtualCursorY = -1)
+    public Mat DrawDebug(Mat frame, IReadOnlyList<MarkerBlob> blobs)
     {
         var debug = frame.Clone();
         if (debug.Channels() == 1)
             Cv2.CvtColor(debug, debug, ColorConversionCodes.GRAY2BGR);
 
-        if (IsIdentifying)
+        string status = IsIdentifying
+            ? $"Identifying markers... (move your hands)"
+            : $"Tracking {ConfirmedMarkerCount} markers";
+        var colour = IsIdentifying ? new Scalar(0, 140, 255) : new Scalar(0, 220, 0);
+        Cv2.PutText(debug, status, new Point(10, 28),
+            HersheyFonts.HersheySimplex, 0.65, colour, 2);
+
+        // Draw confirmed marker search windows (orange)
+        foreach (var m in _confirmedMarkers)
         {
-            // During identification: show ALL bright blobs from the last slow pass
-            // so the user can see what the camera sees and verify the threshold.
-            string idStatus = $"Identifying... pass {SlowPassCount} | {_prevSlowBlobs.Count} blobs seen";
-            Cv2.PutText(debug, idStatus, new Point(10, 28),
-                HersheyFonts.HersheySimplex, 0.60, new Scalar(0, 140, 255), 2);
-
-            // Draw all blobs seen in the last slow pass as yellow circles
-            foreach (var (bx, by) in _prevSlowBlobs)
-            {
-                var c = new Point((int)bx, (int)by);
-                Cv2.Circle(debug, c, 6, new Scalar(0, 220, 255), 1);
-            }
-
-            // Draw confirmed markers so far as bright green
-            foreach (var m in _confirmedMarkers)
-            {
-                var c = new Point((int)m.X, (int)m.Y);
-                Cv2.Circle(debug, c, 10, new Scalar(0, 255, 80), 2);
-                Cv2.Circle(debug, c, 3,  new Scalar(0, 255, 80), -1);
-            }
-        }
-        else
-        {
-            // After identification: show confirmed marker search windows and tracked blobs
-            string trackStatus = $"Tracking {ConfirmedMarkerCount} markers";
-            Cv2.PutText(debug, trackStatus, new Point(10, 28),
-                HersheyFonts.HersheySimplex, 0.65, new Scalar(0, 220, 0), 2);
-
-            // Draw confirmed marker search windows (orange boxes)
-            foreach (var m in _confirmedMarkers)
-            {
-                Cv2.Rectangle(debug,
-                    new Point((int)(m.X - FastWindowRadius), (int)(m.Y - FastWindowRadius)),
-                    new Point((int)(m.X + FastWindowRadius), (int)(m.Y + FastWindowRadius)),
-                    new Scalar(0, 140, 255), 1);
-            }
-
-            // Draw tracked blobs (green circles with red centre dot)
-            foreach (var blob in blobs)
-            {
-                var c = new Point((int)blob.X, (int)blob.Y);
-                Cv2.Circle(debug, c, 8, Scalar.Green, 2);
-                Cv2.Circle(debug, c, 2, Scalar.Red, -1);
-            }
+            Cv2.Rectangle(debug,
+                new Point((int)(m.X - FastWindowRadius), (int)(m.Y - FastWindowRadius)),
+                new Point((int)(m.X + FastWindowRadius), (int)(m.Y + FastWindowRadius)),
+                new Scalar(0, 140, 255), 1);
         }
 
-        // Draw virtual cursor crosshair in test mode (when virtualCursorX >= 0)
-        if (virtualCursorX >= 0 && virtualCursorY >= 0)
+        // Draw detected blobs (green)
+        foreach (var blob in blobs)
         {
-            int cx = (int)virtualCursorX;
-            int cy = (int)virtualCursorY;
-            int r  = 14;
-            // White outer ring
-            Cv2.Circle(debug, new Point(cx, cy), r, new Scalar(255, 255, 255), 2);
-            // Cyan inner dot
-            Cv2.Circle(debug, new Point(cx, cy), 4, new Scalar(255, 220, 0), -1);
-            // Crosshair lines
-            Cv2.Line(debug, new Point(cx - r - 6, cy), new Point(cx - r + 2, cy), new Scalar(255, 255, 255), 1);
-            Cv2.Line(debug, new Point(cx + r - 2, cy), new Point(cx + r + 6, cy), new Scalar(255, 255, 255), 1);
-            Cv2.Line(debug, new Point(cx, cy - r - 6), new Point(cx, cy - r + 2), new Scalar(255, 255, 255), 1);
-            Cv2.Line(debug, new Point(cx, cy + r - 2), new Point(cx, cy + r + 6), new Scalar(255, 255, 255), 1);
-            // TEST MODE label
-            Cv2.PutText(debug, "TEST MODE", new Point(10, debug.Height - 12),
-                HersheyFonts.HersheySimplex, 0.55, new Scalar(0, 184, 255), 2);
+            var c = new Point((int)blob.X, (int)blob.Y);
+            Cv2.Circle(debug, c, 8, Scalar.Green, 2);
+            Cv2.Circle(debug, c, 2, Scalar.Red, -1);
         }
 
         return debug;

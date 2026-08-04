@@ -35,17 +35,15 @@ public class CameraEnumerator
     /// </summary>
     public IReadOnlyList<CameraDeviceInfo> Enumerate()
     {
-        // Use the DirectShow COM API to get device names WITHOUT opening any camera.
-        // Opening a camera during enumeration (even with MSMF) can leave the sensor
-        // in a state where subsequent opens produce black frames.
+        // First try to get real names from DirectShow
         var names = TryGetDirectShowNames();
 
         var devices = new List<CameraDeviceInfo>();
 
         if (names.Count > 0)
         {
-            // Assign sequential indices to the devices returned by COM.
-            // The index order from ICreateDevEnum matches the OpenCV device index.
+            // Use COM names directly — do NOT open any camera to verify.
+            // Opening a camera during enumeration corrupts the OV9281 sensor state.
             for (int i = 0; i < names.Count && i < MaxProbeIndex; i++)
             {
                 devices.Add(new CameraDeviceInfo(i, names[i]));
@@ -54,8 +52,7 @@ public class CameraEnumerator
         }
         else
         {
-            // Fallback: if COM enumeration failed entirely, add a single generic entry.
-            // Do NOT open any camera to probe — just offer index 0.
+            // COM enumeration failed — offer Camera 0 without probing.
             _logger.LogWarning("DirectShow name query failed; offering Camera 0 as fallback.");
             devices.Add(new CameraDeviceInfo(0, "Camera 0"));
         }
