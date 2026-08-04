@@ -72,7 +72,15 @@ public partial class MainWindow : System.Windows.Window
             return;
         }
 
-        // Set resolution only — the safest possible configuration
+        // Request MJPEG format — the OV9281 natively outputs MJPEG and YUV2.
+        // Without this, OpenCV's DirectShow backend requests BGR24 by default,
+        // which the camera cannot deliver. The failed format negotiation leaves
+        // the camera firmware in a stuck state that produces black frames until
+        // the USB cable is physically unplugged.
+        // Setting FourCC to MJPG forces DirectShow to negotiate MJPEG, which
+        // the camera supports. OpenCV decodes it to BGR internally.
+        _capture.Set(VideoCaptureProperties.FourCC,
+            VideoWriter.FourCC('M', 'J', 'P', 'G'));
         _capture.Set(VideoCaptureProperties.FrameWidth,  _settings.FrameWidth);
         _capture.Set(VideoCaptureProperties.FrameHeight, _settings.FrameHeight);
 
