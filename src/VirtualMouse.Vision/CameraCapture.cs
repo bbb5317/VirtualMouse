@@ -5,14 +5,28 @@ using Microsoft.Extensions.Logging;
 namespace VirtualMouse.Vision;
 
 /// <summary>
-/// Manages the camera capture session using OpenCvSharp4 (VideoCapture / DirectShow).
+/// Manages camera capture with a two-thread design to prevent buffer backlog.
 ///
-/// Camera settings are applied from TrackingSettings, matching the values
-/// configured in the Video Proc Amp panel of the ArduCam OV9281 driver:
-///   Brightness: -64, Contrast: 64, Sharpness: 3, Gamma: 72,
-///   White Balance: 4650, Backlight Comp: 1, Gain: 0.
-/// AGC (auto-exposure) is left at the driver default (enabled) so the
-/// camera can adapt its exposure to the ambient lighting conditions.
+/// THE PROBLEM:
+/// DirectShow (and most UVC drivers) maintain an internal ring buffer of
+/// decoded frames. The OV9281 at 120fps produces a new frame every ~8ms.
+/// If the application reads frames slower than that (because each frame
+/// goes through detection, grouping, gesture logic, and WPF rendering),
+/// frames pile up in the buffer. The application then reads them in order,
+/// playing back stale frames — this is the "slow motion" effect.
+///
+/// THE FIX — two-thread design:
+///
+///   GRAB THREAD (runs as fast as the camera produces frames):
+///     Calls VideoCapture.Read() in a tight loop, discarding every frame
+///     except the most recent. This drains the DirectShow buffer continuously
+///     so it never fills up. The latest frame is stored in a volatile slot.
+///
+///   PROCESS THREAD (runs at the pipeline's natural speed):
+///     Picks up the latest frame from the slot, clones it, and raises
+///     FrameReady. If no new frame has arrived since the last pick-up,
+///     it waits briefly and tries again. The pipeline always sees the
+///     current frame, never a stale one.
 /// </summary>
 public sealed class CameraCapture : IDisposable
 {
@@ -20,6 +34,12 @@ public sealed class CameraCapture : IDisposable
     private readonly TrackingSettings _settings;
     private VideoCapture? _capture;
     private bool _isRunning;
+
+    // Latest-frame slot — grab thread writes, process thread reads
+    private Mat? _latestFrame;
+    private readonly object _frameLock = new();
+    private long _frameSerial;      // incremented by grab thread on each new frame
+    private long _lastProcessed;    // last serial seen by process thread
 
     public event EventHandler<Mat>? FrameReady;
     public bool IsOpen => _capture?.IsOpened() ?? false;
@@ -41,31 +61,23 @@ public sealed class CameraCapture : IDisposable
                 return false;
             }
 
-            // ── Resolution and framerate ───────────────────────────────────
             _capture.Set(VideoCaptureProperties.FrameWidth,  _settings.FrameWidth);
             _capture.Set(VideoCaptureProperties.FrameHeight, _settings.FrameHeight);
             _capture.Set(VideoCaptureProperties.Fps,         _settings.TargetFps);
-            _capture.Set(VideoCaptureProperties.ConvertRgb,  0); // raw mono
+            _capture.Set(VideoCaptureProperties.ConvertRgb,  0);
 
-            // ── Video Proc Amp settings (from user's driver panel) ─────────
-            // These map to DirectShow IAMVideoProcAmp properties.
-            // OpenCV exposes a subset via VideoCaptureProperties.
-            TrySet(VideoCaptureProperties.Brightness,    _settings.CamBrightness);
-            TrySet(VideoCaptureProperties.Contrast,      _settings.CamContrast);
-            TrySet(VideoCaptureProperties.Saturation,    _settings.CamSaturation);
-            TrySet(VideoCaptureProperties.Sharpness,     _settings.CamSharpness);
-            TrySet(VideoCaptureProperties.Gamma,         _settings.CamGamma);
+            // Minimise the internal DirectShow buffer to 1 frame so the grab
+            // thread always gets the freshest frame with minimal latency.
+            _capture.Set(VideoCaptureProperties.BufferSize, 1);
+
+            TrySet(VideoCaptureProperties.Brightness,        _settings.CamBrightness);
+            TrySet(VideoCaptureProperties.Contrast,          _settings.CamContrast);
+            TrySet(VideoCaptureProperties.Saturation,        _settings.CamSaturation);
+            TrySet(VideoCaptureProperties.Sharpness,         _settings.CamSharpness);
+            TrySet(VideoCaptureProperties.Gamma,             _settings.CamGamma);
             TrySet(VideoCaptureProperties.WhiteBalanceBlueU, _settings.CamWhiteBalance);
-            // BacklightComp is not exposed as a named property in OpenCvSharp;
-            // pass it via the numeric DirectShow property ID (VideoProcAmp_BacklightCompensation = 8).
-            // OpenCvSharp accepts raw integer IDs cast to VideoCaptureProperties.
-            TrySet((VideoCaptureProperties)VideoProcAmpBacklightComp, _settings.CamBacklightComp);
-            TrySet(VideoCaptureProperties.Gain,          _settings.CamGain);
-
-            // ── Leave AGC / auto-exposure at driver default ────────────────
-            // Do NOT disable auto-exposure. The OV9281 needs AGC to keep
-            // the markers visible under varying ambient lighting.
-            // Motion detection will use shape + motion-calibration instead.
+            TrySet((VideoCaptureProperties)8,                _settings.CamBacklightComp); // BacklightComp
+            TrySet(VideoCaptureProperties.Gain,              _settings.CamGain);
 
             var w   = _capture.Get(VideoCaptureProperties.FrameWidth);
             var h   = _capture.Get(VideoCaptureProperties.FrameHeight);
@@ -80,9 +92,6 @@ public sealed class CameraCapture : IDisposable
         }
     }
 
-    // DirectShow VideoProcAmp property ID for Backlight Compensation (not in OpenCvSharp enum)
-    private const int VideoProcAmpBacklightComp = 8;
-
     private void TrySet(VideoCaptureProperties prop, double value)
     {
         bool ok = _capture!.Set(prop, value);
@@ -93,19 +102,68 @@ public sealed class CameraCapture : IDisposable
     {
         if (!IsOpen) throw new InvalidOperationException("Camera not open.");
         _isRunning = true;
-        Task.Run(() => CaptureLoop(cancellationToken), cancellationToken);
+        _frameSerial = 0;
+        _lastProcessed = -1;
+
+        // Grab thread — drains the camera buffer at full speed
+        Task.Run(() => GrabLoop(cancellationToken), cancellationToken);
+
+        // Process thread — picks up the latest frame and raises FrameReady
+        Task.Run(() => ProcessLoop(cancellationToken), cancellationToken);
     }
 
-    private void CaptureLoop(CancellationToken cancellationToken)
+    // ── Grab thread ────────────────────────────────────────────────────────
+
+    private void GrabLoop(CancellationToken ct)
     {
         using var frame = new Mat();
-        while (_isRunning && !cancellationToken.IsCancellationRequested)
+        while (_isRunning && !ct.IsCancellationRequested)
         {
-            if (_capture!.Read(frame) && !frame.Empty())
-                FrameReady?.Invoke(this, frame.Clone());
-            else
-                Thread.Sleep(5);
+            if (!_capture!.Read(frame) || frame.Empty())
+            {
+                Thread.Sleep(1);
+                continue;
+            }
+
+            // Swap the latest frame slot (clone once, discard old)
+            var cloned = frame.Clone();
+            Mat? old;
+            lock (_frameLock)
+            {
+                old = _latestFrame;
+                _latestFrame = cloned;
+                Interlocked.Increment(ref _frameSerial);
+            }
+            old?.Dispose();
         }
+        _logger.LogDebug("Grab thread stopped.");
+    }
+
+    // ── Process thread ─────────────────────────────────────────────────────
+
+    private void ProcessLoop(CancellationToken ct)
+    {
+        while (_isRunning && !ct.IsCancellationRequested)
+        {
+            long serial = Interlocked.Read(ref _frameSerial);
+            if (serial == _lastProcessed)
+            {
+                // No new frame yet — yield briefly
+                Thread.Sleep(1);
+                continue;
+            }
+
+            Mat? toProcess;
+            lock (_frameLock)
+            {
+                toProcess = _latestFrame?.Clone();
+                _lastProcessed = serial;
+            }
+
+            if (toProcess != null)
+                FrameReady?.Invoke(this, toProcess);
+        }
+        _logger.LogDebug("Process thread stopped.");
     }
 
     public void Stop() => _isRunning = false;
@@ -113,6 +171,11 @@ public sealed class CameraCapture : IDisposable
     public void Dispose()
     {
         _isRunning = false;
+        lock (_frameLock)
+        {
+            _latestFrame?.Dispose();
+            _latestFrame = null;
+        }
         _capture?.Dispose();
         _capture = null;
     }
