@@ -56,7 +56,10 @@ public sealed class CameraCapture : IDisposable
             TrySet(VideoCaptureProperties.Sharpness,     _settings.CamSharpness);
             TrySet(VideoCaptureProperties.Gamma,         _settings.CamGamma);
             TrySet(VideoCaptureProperties.WhiteBalanceBlueU, _settings.CamWhiteBalance);
-            TrySet(VideoCaptureProperties.BacklightFlicker, _settings.CamBacklightComp);
+            // BacklightComp is not exposed as a named property in OpenCvSharp;
+            // pass it via the numeric DirectShow property ID (VideoProcAmp_BacklightCompensation = 8).
+            // OpenCvSharp accepts raw integer IDs cast to VideoCaptureProperties.
+            TrySet((VideoCaptureProperties)VideoProcAmpBacklightComp, _settings.CamBacklightComp);
             TrySet(VideoCaptureProperties.Gain,          _settings.CamGain);
 
             // ── Leave AGC / auto-exposure at driver default ────────────────
@@ -76,6 +79,9 @@ public sealed class CameraCapture : IDisposable
             return false;
         }
     }
+
+    // DirectShow VideoProcAmp property ID for Backlight Compensation (not in OpenCvSharp enum)
+    private const int VideoProcAmpBacklightComp = 8;
 
     private void TrySet(VideoCaptureProperties prop, double value)
     {

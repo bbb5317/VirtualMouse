@@ -47,7 +47,10 @@ public class GestureRecognizer
     private bool _rightButtonHeld;
 
     // Activation hysteresis state
-    private bool _activationArmed; // true once spread exceeds upper threshold
+    // Reserved for future directional hysteresis logic; assigned but not yet read.
+#pragma warning disable CS0414
+    private bool _activationArmed;
+#pragma warning restore CS0414
 
     // ── Public State ───────────────────────────────────────────────────────
 
