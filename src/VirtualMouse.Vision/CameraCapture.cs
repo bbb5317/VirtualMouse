@@ -5,21 +5,19 @@ using Microsoft.Extensions.Logging;
 namespace VirtualMouse.Vision;
 
 /// <summary>
-/// Manages camera capture with automatic device reset and frame verification.
+/// Manages camera capture using a two-thread design to prevent buffer backlog.
 ///
-/// On every Open():
-///   1. Reset the device via SetupAPI (disable → wait → enable → wait).
-///   2. Open VideoCapture.
-///   3. Read up to 30 frames to verify the sensor is producing live output.
-///      If all frames are black (mean brightness < 1.0), the sensor has not
-///      recovered — perform another reset cycle and retry (up to 3 attempts).
-///   4. Start the two-thread grab/process loop.
+/// GRAB THREAD: drains the DirectShow buffer at full camera speed,
+///   keeping only the latest frame in a slot.
+/// PROCESS THREAD: picks up the latest frame and raises FrameReady.
+///
+/// Note: if the camera shows a black screen, unplug and replug the USB cable
+/// before starting tracking. No software reset is performed.
 /// </summary>
 public sealed class CameraCapture : IDisposable
 {
     private readonly ILogger<CameraCapture> _logger;
     private readonly TrackingSettings _settings;
-    private readonly UsbDeviceResetter _resetter;
 
     private VideoCapture? _capture;
     private volatile bool _isRunning;
@@ -34,59 +32,24 @@ public sealed class CameraCapture : IDisposable
     public event EventHandler<Mat>? FrameReady;
     public bool IsOpen => _capture?.IsOpened() ?? false;
 
-    public CameraCapture(
-        ILogger<CameraCapture> logger,
-        TrackingSettings settings,
-        UsbDeviceResetter resetter)
+    public CameraCapture(ILogger<CameraCapture> logger, TrackingSettings settings)
     {
         _logger = logger;
         _settings = settings;
-        _resetter = resetter;
     }
 
     public bool Open()
     {
-        const int maxAttempts = 3;
-
-        for (int attempt = 1; attempt <= maxAttempts; attempt++)
-        {
-            _logger.LogInformation("Camera open attempt {A}/{M}...", attempt, maxAttempts);
-
-            // Reset the device before every attempt
-            _resetter.ResetCamera(_settings.CameraResetNameFilter);
-
-            if (!TryOpenCapture())
-            {
-                _logger.LogWarning("VideoCapture.Open() failed on attempt {A}.", attempt);
-                continue;
-            }
-
-            // Verify the sensor is producing live frames
-            if (VerifyLiveFrames())
-            {
-                _logger.LogInformation("Camera verified live on attempt {A}.", attempt);
-                return true;
-            }
-
-            _logger.LogWarning(
-                "Camera opened but produces black frames on attempt {A}. " +
-                "Releasing and retrying...", attempt);
-            _capture?.Release();
-            _capture?.Dispose();
-            _capture = null;
-        }
-
-        _logger.LogError("Camera failed to produce live frames after {M} attempts.", maxAttempts);
-        return false;
-    }
-
-    private bool TryOpenCapture()
-    {
         try
         {
             _capture = new VideoCapture(_settings.CameraDeviceIndex, VideoCaptureAPIs.DSHOW);
-            if (!_capture.IsOpened()) return false;
+            if (!_capture.IsOpened())
+            {
+                _logger.LogError("Failed to open camera at index {Index}.", _settings.CameraDeviceIndex);
+                return false;
+            }
 
+            // Minimise internal buffer to 1 frame to reduce latency
             _capture.Set(VideoCaptureProperties.BufferSize,  1);
             _capture.Set(VideoCaptureProperties.FrameWidth,  _settings.FrameWidth);
             _capture.Set(VideoCaptureProperties.FrameHeight, _settings.FrameHeight);
@@ -105,38 +68,14 @@ public sealed class CameraCapture : IDisposable
             var w   = _capture.Get(VideoCaptureProperties.FrameWidth);
             var h   = _capture.Get(VideoCaptureProperties.FrameHeight);
             var fps = _capture.Get(VideoCaptureProperties.Fps);
-            _logger.LogInformation("VideoCapture opened: {W}x{H} @ {FPS}fps", w, h, fps);
+            _logger.LogInformation("Camera ready: {W}x{H} @ {FPS}fps", w, h, fps);
             return true;
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Exception opening VideoCapture.");
+            _logger.LogError(ex, "Exception while opening camera.");
             return false;
         }
-    }
-
-    /// <summary>
-    /// Reads up to 30 frames and checks whether any of them have a mean
-    /// brightness above 1.0. A camera stuck in a black-screen state will
-    /// produce frames with mean brightness of exactly 0.
-    /// </summary>
-    private bool VerifyLiveFrames()
-    {
-        _logger.LogInformation("Verifying camera output (reading up to 30 frames)...");
-        using var frame = new Mat();
-        for (int i = 0; i < 30; i++)
-        {
-            if (!_capture!.Read(frame) || frame.Empty()) continue;
-            double mean = Cv2.Mean(frame).Val0;
-            _logger.LogDebug("  Frame {I}: mean brightness = {M:F2}", i, mean);
-            if (mean > 1.0)
-            {
-                _logger.LogInformation("  Live frame confirmed at frame {I} (mean={M:F2}).", i, mean);
-                return true;
-            }
-        }
-        _logger.LogWarning("  All 30 frames were black (mean ≤ 1.0). Sensor not recovered.");
-        return false;
     }
 
     private void TrySet(VideoCaptureProperties prop, double value)
@@ -148,7 +87,7 @@ public sealed class CameraCapture : IDisposable
     public void StartCapture(CancellationToken cancellationToken)
     {
         if (!IsOpen) throw new InvalidOperationException("Camera not open.");
-        _isRunning = true;
+        _isRunning     = true;
         _frameSerial   = 0;
         _lastProcessed = -1;
         _grabTask    = Task.Run(() => GrabLoop(cancellationToken),    cancellationToken);
@@ -171,6 +110,7 @@ public sealed class CameraCapture : IDisposable
             }
             old?.Dispose();
         }
+        _logger.LogDebug("Grab thread exited.");
     }
 
     private void ProcessLoop(CancellationToken ct)
@@ -187,6 +127,7 @@ public sealed class CameraCapture : IDisposable
             }
             if (toProcess != null) FrameReady?.Invoke(this, toProcess);
         }
+        _logger.LogDebug("Process thread exited.");
     }
 
     public void Stop()

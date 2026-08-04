@@ -12,13 +12,6 @@ public class TrackingSettings
     public int FrameHeight       { get; set; } = 800;
     public int TargetFps         { get; set; } = 120;
 
-    /// <summary>
-    /// Name fragment used to identify the camera device for USB reset.
-    /// The resetter will match any device whose friendly name contains this string.
-    /// Set to empty string to reset ALL camera-class devices.
-    /// </summary>
-    public string CameraResetNameFilter { get; set; } = "Arducam";
-
     // ── Camera Video Proc Amp ──────────────────────────────────────
     public double CamBrightness    { get; set; } = -64;
     public double CamContrast      { get; set; } = 64;
