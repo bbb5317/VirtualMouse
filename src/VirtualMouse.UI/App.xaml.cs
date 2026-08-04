@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using System.Windows;
 using System.Windows.Threading;
 using VirtualMouse.Core;
+using VirtualMouse.Input;
 using VirtualMouse.Vision;
 
 namespace VirtualMouse.UI;
@@ -36,15 +37,17 @@ public partial class App : Application
                 b.SetMinimumLevel(LogLevel.Debug);
             });
 
-            // Settings (needed for camera index + resolution)
             services.AddSingleton<SettingsService>();
             services.AddSingleton<TrackingSettings>(sp =>
                 sp.GetRequiredService<SettingsService>().Load());
 
-            // Camera enumeration
             services.AddSingleton<CameraEnumerator>();
+            services.AddSingleton<CameraCapture>();
+            services.AddSingleton<MarkerDetector>();
+            services.AddSingleton<MarkerGrouper>();
+            services.AddSingleton<GestureRecognizer>();
+            services.AddSingleton<WindowsMouseController>();
 
-            // Minimal window — no detection, no gesture, no mouse
             services.AddSingleton<MainWindow>();
 
             Services = services.BuildServiceProvider();
@@ -59,5 +62,11 @@ public partial class App : Application
                 MessageBoxImage.Error);
             Shutdown(1);
         }
+    }
+
+    protected override void OnExit(ExitEventArgs e)
+    {
+        Services?.GetService<WindowsMouseController>()?.ReleaseAll();
+        base.OnExit(e);
     }
 }
