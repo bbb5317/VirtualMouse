@@ -4,8 +4,139 @@
         Title="Virtual Mouse — Camera Test"
         Height="700" Width="1100"
         Background="#1E1E1E"
-        Foreground="White"
+        Foreground="#E0E0E0"
         WindowStartupLocation="CenterScreen">
+
+    <Window.Resources>
+
+        <!-- ════════════════════════════════════════════════════════════════
+             BUTTON — full ControlTemplate so Windows theme cannot override
+             ════════════════════════════════════════════════════════════════ -->
+        <Style TargetType="Button">
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Cursor"          Value="Hand"/>
+            <Setter Property="FontSize"        Value="12"/>
+            <Setter Property="HorizontalContentAlignment" Value="Center"/>
+            <Setter Property="VerticalContentAlignment"   Value="Center"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Root"
+                                Background="{TemplateBinding Background}"
+                                CornerRadius="3"
+                                Padding="{TemplateBinding Padding}">
+                            <TextBlock x:Name="Txt"
+                                       Text="{TemplateBinding Content}"
+                                       Foreground="{TemplateBinding Foreground}"
+                                       FontWeight="{TemplateBinding FontWeight}"
+                                       FontSize="{TemplateBinding FontSize}"
+                                       HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                       VerticalAlignment="{TemplateBinding VerticalContentAlignment}"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Root" Property="Opacity" Value="0.82"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Root" Property="Opacity" Value="0.65"/>
+                            </Trigger>
+                            <!-- Disabled: dim but keep colours — NO grey/white override -->
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="Root" Property="Opacity" Value="0.40"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- ════════════════════════════════════════════════════════════════
+             COMBOBOX — full ControlTemplate so Windows theme cannot override
+             ════════════════════════════════════════════════════════════════ -->
+        <ControlTemplate x:Key="DarkComboToggle" TargetType="ToggleButton">
+            <Border Background="#3C3C3C" BorderBrush="#666" BorderThickness="1" CornerRadius="3">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition/>
+                        <ColumnDefinition Width="22"/>
+                    </Grid.ColumnDefinitions>
+                    <ContentPresenter Grid.Column="0" Margin="8,0,0,0"
+                                      VerticalAlignment="Center"
+                                      TextBlock.Foreground="#E0E0E0"/>
+                    <Path Grid.Column="1" Data="M 0 0 L 5 5 L 10 0 Z"
+                          Fill="#AAAAAA" Width="10" Height="5"
+                          HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                </Grid>
+            </Border>
+        </ControlTemplate>
+
+        <Style TargetType="ComboBox">
+            <Setter Property="Height"     Value="30"/>
+            <Setter Property="Foreground" Value="#E0E0E0"/>
+            <Setter Property="Background" Value="#3C3C3C"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ComboBox">
+                        <Grid>
+                            <ToggleButton Template="{StaticResource DarkComboToggle}"
+                                          IsChecked="{Binding IsDropDownOpen, Mode=TwoWay,
+                                              RelativeSource={RelativeSource TemplatedParent}}"
+                                          Focusable="False"/>
+                            <!-- Selected item text -->
+                            <TextBlock Margin="8,0,26,0"
+                                       VerticalAlignment="Center"
+                                       Foreground="#E0E0E0"
+                                       Text="{Binding SelectionBoxItem,
+                                           RelativeSource={RelativeSource TemplatedParent}}"
+                                       IsHitTestVisible="False"
+                                       TextTrimming="CharacterEllipsis"/>
+                            <Popup IsOpen="{TemplateBinding IsDropDownOpen}"
+                                   AllowsTransparency="True" Focusable="False"
+                                   PopupAnimation="Slide" Placement="Bottom">
+                                <Border Background="#2E2E2E" BorderBrush="#666"
+                                        BorderThickness="1"
+                                        MaxHeight="{TemplateBinding MaxDropDownHeight}">
+                                    <ScrollViewer>
+                                        <ItemsPresenter/>
+                                    </ScrollViewer>
+                                </Border>
+                            </Popup>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style TargetType="ComboBoxItem">
+            <Setter Property="Background" Value="#2E2E2E"/>
+            <Setter Property="Foreground" Value="#E0E0E0"/>
+            <Setter Property="Padding"    Value="8,5"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ComboBoxItem">
+                        <Border x:Name="Bd"
+                                Background="{TemplateBinding Background}"
+                                Padding="{TemplateBinding Padding}">
+                            <TextBlock Text="{TemplateBinding Content}"
+                                       Foreground="{TemplateBinding Foreground}"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsHighlighted" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="#1565C0"/>
+                                <Setter Property="Foreground" Value="White"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- TextBlock default foreground -->
+        <Style TargetType="TextBlock">
+            <Setter Property="Foreground" Value="#E0E0E0"/>
+        </Style>
+
+    </Window.Resources>
 
     <Grid Margin="10">
         <Grid.ColumnDefinitions>
@@ -21,13 +152,15 @@
                     <RowDefinition Height="*"/>
                     <RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
-                <TextBlock Grid.Row="0" Text="Camera Preview (raw — no processing)"
-                           Foreground="#1E90FF" FontSize="13" FontWeight="Bold" Margin="10,8"/>
+                <TextBlock Grid.Row="0"
+                           Text="Camera Preview (raw — no processing)"
+                           Foreground="#4DA6FF" FontSize="13" FontWeight="Bold"
+                           Margin="10,8"/>
                 <Image x:Name="PreviewImage" Grid.Row="1" Stretch="Uniform" Margin="5"/>
                 <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="10,4,10,8">
-                    <TextBlock Text="FPS: "/>
+                    <TextBlock Text="FPS: " Foreground="#888"/>
                     <TextBlock x:Name="FpsLabel" Text="--" Foreground="#00CC44" Width="40"/>
-                    <TextBlock Text="Frames: " Margin="20,0,0,0"/>
+                    <TextBlock Text="Frames: " Foreground="#888" Margin="20,0,0,0"/>
                     <TextBlock x:Name="FrameCountLabel" Text="0" Foreground="#00CC44"/>
                 </StackPanel>
             </Grid>
@@ -36,47 +169,61 @@
         <!-- Controls -->
         <Border Grid.Column="1" Background="#2A2A2A" CornerRadius="4" Padding="12">
             <StackPanel>
-                <TextBlock Text="Camera" FontSize="13" FontWeight="Bold"
-                           Foreground="#1E90FF" Margin="0,0,0,10"/>
 
-                <TextBlock Text="Device:" Margin="0,0,0,3"/>
+                <TextBlock Text="Camera" FontSize="13" FontWeight="Bold"
+                           Foreground="#4DA6FF" Margin="0,0,0,10"/>
+
+                <TextBlock Text="Device:" Foreground="#AAAAAA" Margin="0,0,0,3"/>
                 <Grid Margin="0,0,0,8">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
-                    <ComboBox x:Name="CameraComboBox" Grid.Column="0"
-                              Background="#3C3C3C" Foreground="White"
-                              Padding="6,4"/>
-                    <Button Grid.Column="1" Content="↻" Margin="4,0,0,0"
-                            Padding="8,4" Background="#3C3C3C" Foreground="White"
-                            Click="RefreshCameras_Click"/>
+                    <ComboBox x:Name="CameraComboBox" Grid.Column="0"/>
+                    <Button Grid.Column="1" Content="↻"
+                            Margin="4,0,0,0" Padding="8,5"
+                            Background="#4A4A4A" Foreground="#E0E0E0"
+                            Click="RefreshCameras_Click"
+                            ToolTip="Refresh camera list"/>
                 </Grid>
 
-                <Button x:Name="StartButton" Content="▶  Open Camera"
-                        Background="#1E90FF" Foreground="White" FontWeight="Bold"
-                        Padding="8,6" Margin="0,4,0,4" Click="StartButton_Click"/>
-                <Button x:Name="ResetUsbButton" Content="⚡  Reset USB Port"
-                        Background="#7B3F00" Foreground="White" FontWeight="Bold"
-                        Padding="8,6" Margin="0,4,0,0" Click="ResetUsb_Click"
-                        ToolTip="Restart the camera USB device via pnputil (requires Admin)"/>
-                <Button x:Name="StopButton" Content="■  Stop Tracking"
-                        Background="#555" Foreground="White" Padding="8,6"
-                        IsEnabled="False" Click="StopButton_Click"/>
+                <Button x:Name="StartButton"
+                        Content="▶  Open Camera"
+                        Background="#1565C0" Foreground="White"
+                        FontWeight="Bold" Padding="8,8"
+                        Margin="0,0,0,4"
+                        Click="StartButton_Click"/>
+
+                <Button x:Name="ResetUsbButton"
+                        Content="⚡  Reset USB Port"
+                        Background="#7B3F00" Foreground="White"
+                        FontWeight="Bold" Padding="8,7"
+                        Margin="0,0,0,4"
+                        Click="ResetUsb_Click"
+                        ToolTip="Restart the ArduCam USB device (requires Admin)"/>
+
+                <Button x:Name="StopButton"
+                        Content="■  Close Camera"
+                        Background="#444444" Foreground="#E0E0E0"
+                        FontWeight="Bold" Padding="8,7"
+                        IsEnabled="False"
+                        Click="StopButton_Click"/>
 
                 <Separator Background="#444" Margin="0,16"/>
 
                 <TextBlock Text="Status" FontSize="13" FontWeight="Bold"
-                           Foreground="#1E90FF" Margin="0,0,0,8"/>
+                           Foreground="#4DA6FF" Margin="0,0,0,6"/>
                 <TextBlock x:Name="StatusLabel" Text="Stopped"
                            Foreground="#CC3333" FontSize="12"/>
 
                 <Separator Background="#444" Margin="0,16"/>
-                <TextBlock TextWrapping="Wrap" Foreground="#888" FontSize="10">
+
+                <TextBlock TextWrapping="Wrap" Foreground="#666" FontSize="10">
 DIAGNOSTIC MODE
 No detection, no processing.
 Raw camera frames only.
                 </TextBlock>
+
             </StackPanel>
         </Border>
     </Grid>
