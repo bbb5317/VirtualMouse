@@ -13,25 +13,16 @@ public record CameraDeviceInfo(int Index, string Name)
 }
 
 /// <summary>
-/// Enumerates cameras by probing MSMF indices 0..N and reading the
-/// backend-reported device name from each opened VideoCapture.
-/// This guarantees the index in CameraDeviceInfo matches exactly what
-/// VideoCapture(index, MSMF) will open — no cross-API ordering mismatch.
-///
-/// Each probe opens the camera briefly (no frames read), reads the name,
-/// then immediately releases it. The OV9281 survives this because we use
-/// MSMF (not DSHOW) and release cleanly before opening the next index.
+/// Enumerates cameras by:
+///   1. Querying friendly names via Windows Media Foundation COM interfaces
+///      (IMFAttributes::GetAllocatedString on each IMFActivate object).
+///   2. Probing each MSMF VideoCapture index to confirm it opens.
+///   3. Assigning MF name[i] to MSMF index i (same enumeration order).
 /// </summary>
 public class CameraEnumerator
 {
     private readonly ILogger<CameraEnumerator> _logger;
     private const int MaxProbeIndex = 8;
-
-    // VideoCaptureProperties value for backend device name (OpenCV 4.x)
-    // CAP_PROP_BACKEND = 42, but we want the device name string.
-    // OpenCV does not expose a string property for device name via VideoCapture.
-    // We fall back to MF name list cross-referenced by position.
-    private const int CAP_PROP_BACKEND = 42;
 
     public CameraEnumerator(ILogger<CameraEnumerator> logger)
     {
@@ -40,15 +31,20 @@ public class CameraEnumerator
 
     public IReadOnlyList<CameraDeviceInfo> Enumerate()
     {
-        // Step 1: get friendly names from MF in MF enumeration order
+        // Step 1: get friendly names from MF
         var mfNames = new List<string>();
-        try { mfNames = GetMFNames(); }
+        try
+        {
+            mfNames = GetMFNames();
+            _logger.LogDebug("MF returned {Count} names: {Names}",
+                mfNames.Count, string.Join(", ", mfNames));
+        }
         catch (Exception ex)
         {
             _logger.LogWarning("MF name query failed: {Msg}", ex.Message);
         }
 
-        // Step 2: probe each MSMF index to confirm it opens
+        // Step 2: probe each MSMF index
         var devices = new List<CameraDeviceInfo>();
         for (int i = 0; i < MaxProbeIndex; i++)
         {
@@ -57,62 +53,82 @@ public class CameraEnumerator
                 using var cap = new VideoCapture(i, VideoCaptureAPIs.MSMF);
                 if (!cap.IsOpened()) break;
 
-                // Use MF name at position i if available, otherwise generic label
                 string name = (i < mfNames.Count && !string.IsNullOrWhiteSpace(mfNames[i]))
                     ? mfNames[i]
                     : $"Camera {i}";
 
                 devices.Add(new CameraDeviceInfo(i, name));
-                _logger.LogDebug("Probed MSMF index {Index}: {Name}", i, name);
+                _logger.LogDebug("MSMF index {Index} → {Name}", i, name);
             }
-            catch (Exception ex)
+            catch
             {
-                _logger.LogDebug("MSMF probe {Index} failed: {Msg}", i, ex.Message);
                 break;
             }
         }
 
         if (devices.Count == 0)
-        {
-            _logger.LogWarning("No cameras found via probing; offering Camera 0 as fallback.");
             devices.Add(new CameraDeviceInfo(0, "Camera 0"));
-        }
 
         _logger.LogInformation("Enumerated {Count} camera(s).", devices.Count);
         return devices;
     }
 
-    // ── Windows Media Foundation name query ───────────────────────────────
+    // ── MF name enumeration via COM ───────────────────────────────────────
 
     private static List<string> GetMFNames()
     {
         var names = new List<string>();
 
+        // MFStartup
         int hr = MFStartup(MF_VERSION, 0);
         if (hr < 0) return names;
 
         try
         {
-            hr = MFCreateAttributes(out IntPtr pAttr, 1);
+            // Create attribute store
+            hr = MFCreateAttributes(out IntPtr pAttrRaw, 1);
             if (hr < 0) return names;
+
+            var pAttr = (IMFAttributes)Marshal.GetObjectForIUnknown(pAttrRaw);
+            Marshal.Release(pAttrRaw);
 
             try
             {
-                MFSetAttributeGUID(pAttr,
-                    MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE,
-                    MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_GUID);
+                // Set MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE = VideoCapture
+                pAttr.SetGUID(MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE,
+                              MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_GUID);
 
-                hr = MFEnumDeviceSources(pAttr, out IntPtr ppDevices, out uint count);
+                // Enumerate devices
+                hr = MFEnumDeviceSources(
+                    Marshal.GetIUnknownForObject(pAttr),
+                    out IntPtr ppDevices,
+                    out uint count);
+
                 if (hr < 0 || ppDevices == IntPtr.Zero) return names;
 
                 try
                 {
                     for (uint i = 0; i < count && i < 16; i++)
                     {
-                        IntPtr pActivate = Marshal.ReadIntPtr(ppDevices, (int)(i * IntPtr.Size));
-                        string name = GetMFString(pActivate, MF_DEVSOURCE_ATTRIBUTE_FRIENDLY_NAME);
-                        names.Add(string.IsNullOrWhiteSpace(name) ? $"Camera {i}" : name);
-                        Marshal.Release(pActivate);
+                        IntPtr pActivateRaw = Marshal.ReadIntPtr(ppDevices,
+                            (int)(i * IntPtr.Size));
+                        try
+                        {
+                            var activate = (IMFAttributes)
+                                Marshal.GetObjectForIUnknown(pActivateRaw);
+                            string name = activate.GetAllocatedString(
+                                MF_DEVSOURCE_ATTRIBUTE_FRIENDLY_NAME);
+                            names.Add(string.IsNullOrWhiteSpace(name)
+                                ? $"Camera {i}" : name);
+                        }
+                        catch
+                        {
+                            names.Add($"Camera {i}");
+                        }
+                        finally
+                        {
+                            Marshal.Release(pActivateRaw);
+                        }
                     }
                 }
                 finally
@@ -122,7 +138,7 @@ public class CameraEnumerator
             }
             finally
             {
-                Marshal.Release(pAttr);
+                Marshal.ReleaseComObject(pAttr);
             }
         }
         finally
@@ -133,17 +149,131 @@ public class CameraEnumerator
         return names;
     }
 
-    private static string GetMFString(IntPtr pActivate, Guid guidKey)
+    // ── MF COM interface ──────────────────────────────────────────────────
+
+    [ComImport, Guid("2CD2D921-C447-44A7-A13C-4ADABFC247E3"),
+     InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    private interface IMFAttributes
     {
-        int hr = MFGetAttributeString(pActivate, guidKey, out IntPtr pszValue, out _);
-        if (hr < 0 || pszValue == IntPtr.Zero) return string.Empty;
-        try { return Marshal.PtrToStringUni(pszValue) ?? string.Empty; }
-        finally { Marshal.FreeCoTaskMem(pszValue); }
+        // GetItem
+        [PreserveSig] int GetItem(
+            [MarshalAs(UnmanagedType.LPStruct)] Guid guidKey,
+            IntPtr pValue);
+        // GetItemType
+        [PreserveSig] int GetItemType(
+            [MarshalAs(UnmanagedType.LPStruct)] Guid guidKey,
+            out int pType);
+        // CompareItem
+        [PreserveSig] int CompareItem(
+            [MarshalAs(UnmanagedType.LPStruct)] Guid guidKey,
+            IntPtr value, out bool pbResult);
+        // Compare
+        [PreserveSig] int Compare(IMFAttributes pTheirs,
+            int matchType, out bool pbResult);
+        // GetUINT32
+        [PreserveSig] int GetUINT32(
+            [MarshalAs(UnmanagedType.LPStruct)] Guid guidKey,
+            out uint punValue);
+        // GetUINT64
+        [PreserveSig] int GetUINT64(
+            [MarshalAs(UnmanagedType.LPStruct)] Guid guidKey,
+            out ulong punValue);
+        // GetDouble
+        [PreserveSig] int GetDouble(
+            [MarshalAs(UnmanagedType.LPStruct)] Guid guidKey,
+            out double pfValue);
+        // GetGUID
+        [PreserveSig] int GetGUID(
+            [MarshalAs(UnmanagedType.LPStruct)] Guid guidKey,
+            out Guid pguidValue);
+        // GetStringLength
+        [PreserveSig] int GetStringLength(
+            [MarshalAs(UnmanagedType.LPStruct)] Guid guidKey,
+            out uint pcchLength);
+        // GetString
+        [PreserveSig] int GetString(
+            [MarshalAs(UnmanagedType.LPStruct)] Guid guidKey,
+            [Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder pwszValue,
+            uint cchBufSize, out uint pcchLength);
+        // GetAllocatedString
+        [PreserveSig] int GetAllocatedString(
+            [MarshalAs(UnmanagedType.LPStruct)] Guid guidKey,
+            [Out, MarshalAs(UnmanagedType.LPWStr)] out string ppwszValue,
+            out uint pcchLength);
+        // GetBlobSize — skip
+        [PreserveSig] int GetBlobSize(
+            [MarshalAs(UnmanagedType.LPStruct)] Guid guidKey,
+            out uint pcbBlobSize);
+        // GetBlob
+        [PreserveSig] int GetBlob(
+            [MarshalAs(UnmanagedType.LPStruct)] Guid guidKey,
+            [Out] byte[] pBuf, uint cbBufSize, out uint pcbBlobSize);
+        // GetAllocatedBlob
+        [PreserveSig] int GetAllocatedBlob(
+            [MarshalAs(UnmanagedType.LPStruct)] Guid guidKey,
+            out IntPtr ppBuf, out uint pcbSize);
+        // GetUnknown
+        [PreserveSig] int GetUnknown(
+            [MarshalAs(UnmanagedType.LPStruct)] Guid guidKey,
+            [MarshalAs(UnmanagedType.LPStruct)] Guid riid,
+            out IntPtr ppv);
+        // SetItem
+        [PreserveSig] int SetItem(
+            [MarshalAs(UnmanagedType.LPStruct)] Guid guidKey,
+            IntPtr value);
+        // DeleteItem
+        [PreserveSig] int DeleteItem(
+            [MarshalAs(UnmanagedType.LPStruct)] Guid guidKey);
+        // DeleteAllItems
+        [PreserveSig] int DeleteAllItems();
+        // SetUINT32
+        [PreserveSig] int SetUINT32(
+            [MarshalAs(UnmanagedType.LPStruct)] Guid guidKey,
+            uint unValue);
+        // SetUINT64
+        [PreserveSig] int SetUINT64(
+            [MarshalAs(UnmanagedType.LPStruct)] Guid guidKey,
+            ulong unValue);
+        // SetDouble
+        [PreserveSig] int SetDouble(
+            [MarshalAs(UnmanagedType.LPStruct)] Guid guidKey,
+            double fValue);
+        // SetGUID
+        [PreserveSig] int SetGUID(
+            [MarshalAs(UnmanagedType.LPStruct)] Guid guidKey,
+            [MarshalAs(UnmanagedType.LPStruct)] Guid guidValue);
+        // SetString
+        [PreserveSig] int SetString(
+            [MarshalAs(UnmanagedType.LPStruct)] Guid guidKey,
+            [MarshalAs(UnmanagedType.LPWStr)] string wszValue);
+        // SetBlob
+        [PreserveSig] int SetBlob(
+            [MarshalAs(UnmanagedType.LPStruct)] Guid guidKey,
+            [In] byte[] pBuf, uint cbBufSize);
+        // SetUnknown
+        [PreserveSig] int SetUnknown(
+            [MarshalAs(UnmanagedType.LPStruct)] Guid guidKey,
+            [MarshalAs(UnmanagedType.Interface)] object pUnknown);
+        // LockStore / UnlockStore / GetCount / GetItemByIndex / CopyAllItems
+        [PreserveSig] int LockStore();
+        [PreserveSig] int UnlockStore();
+        [PreserveSig] int GetCount(out uint pcItems);
+        [PreserveSig] int GetItemByIndex(uint unIndex,
+            out Guid pguidKey, IntPtr pValue);
+        [PreserveSig] int CopyAllItems(IMFAttributes pDest);
     }
 
-    // ── MF P/Invoke ──────────────────────────────────────────────────────
+    // Extension helper so callers can use the nicer form
+    private static string GetAllocatedString(this IMFAttributes attr, Guid key)
+    {
+        int hr = attr.GetAllocatedString(key, out string val, out _);
+        return hr >= 0 ? (val ?? string.Empty) : string.Empty;
+    }
+
+    // ── MF flat P/Invoke ──────────────────────────────────────────────────
 
     private const uint MF_VERSION = 0x00020070;
+
     private static readonly Guid MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE =
         new("49D1F9C5-60C3-4935-A25A-7F6A0B822F3D");
     private static readonly Guid MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_GUID =
@@ -153,19 +283,16 @@ public class CameraEnumerator
 
     [DllImport("mfplat.dll", ExactSpelling = true)]
     private static extern int MFStartup(uint version, uint dwFlags);
+
     [DllImport("mfplat.dll", ExactSpelling = true)]
     private static extern int MFShutdown();
+
     [DllImport("mfplat.dll", ExactSpelling = true)]
     private static extern int MFCreateAttributes(out IntPtr ppMFAttributes, uint cInitialSize);
-    [DllImport("mfplat.dll", ExactSpelling = true)]
-    private static extern int MFSetAttributeGUID(IntPtr pAttributes,
-        [MarshalAs(UnmanagedType.LPStruct)] Guid guidKey,
-        [MarshalAs(UnmanagedType.LPStruct)] Guid guidValue);
+
     [DllImport("mf.dll", ExactSpelling = true)]
-    private static extern int MFEnumDeviceSources(IntPtr pAttributes,
-        out IntPtr pppSourceActivate, out uint pcSourceActivate);
-    [DllImport("mfplat.dll", ExactSpelling = true)]
-    private static extern int MFGetAttributeString(IntPtr pAttributes,
-        [MarshalAs(UnmanagedType.LPStruct)] Guid guidKey,
-        out IntPtr ppwszValue, out uint pcchLength);
+    private static extern int MFEnumDeviceSources(
+        IntPtr pAttributes,
+        out IntPtr pppSourceActivate,
+        out uint pcSourceActivate);
 }
