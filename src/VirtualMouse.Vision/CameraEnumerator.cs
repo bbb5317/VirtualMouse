@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using System.Text;
 using Microsoft.Extensions.Logging;
 using OpenCvSharp;
 
@@ -116,8 +117,10 @@ public class CameraEnumerator
                         {
                             var activate = (IMFAttributes)
                                 Marshal.GetObjectForIUnknown(pActivateRaw);
-                            string name = activate.GetAllocatedString(
-                                MF_DEVSOURCE_ATTRIBUTE_FRIENDLY_NAME);
+                            int ghr = activate.GetAllocatedString(
+                                MF_DEVSOURCE_ATTRIBUTE_FRIENDLY_NAME,
+                                out string name, out _);
+                            if (ghr < 0) name = string.Empty;
                             names.Add(string.IsNullOrWhiteSpace(name)
                                 ? $"Camera {i}" : name);
                         }
@@ -263,12 +266,7 @@ public class CameraEnumerator
         [PreserveSig] int CopyAllItems(IMFAttributes pDest);
     }
 
-    // Extension helper so callers can use the nicer form
-    private static string GetAllocatedString(this IMFAttributes attr, Guid key)
-    {
-        int hr = attr.GetAllocatedString(key, out string val, out _);
-        return hr >= 0 ? (val ?? string.Empty) : string.Empty;
-    }
+
 
     // ── MF flat P/Invoke ──────────────────────────────────────────────────
 
