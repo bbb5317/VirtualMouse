@@ -62,17 +62,27 @@ public partial class MainWindow : System.Windows.Window
 
     private void StartButton_Click(object sender, RoutedEventArgs e)
     {
-        if (CameraComboBox.SelectedItem is not CameraDeviceInfo device || device.Index < 0)
+        // Get the selected camera — try CameraDeviceInfo first, fall back to SelectedIndex
+        int cameraIndex;
+        if (CameraComboBox.SelectedItem is CameraDeviceInfo device && device.Index >= 0)
+        {
+            cameraIndex = device.Index;
+        }
+        else if (CameraComboBox.SelectedIndex >= 0)
+        {
+            cameraIndex = CameraComboBox.SelectedIndex;
+        }
+        else
         {
             MessageBox.Show("Select a camera first.", "No Camera",
                 MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
 
-        _capture = new VideoCapture(device.Index, VideoCaptureAPIs.MSMF);
+        _capture = new VideoCapture(cameraIndex, VideoCaptureAPIs.MSMF);
         if (!_capture.IsOpened())
         {
-            MessageBox.Show($"Could not open camera index {device.Index}.", "Error",
+            MessageBox.Show($"Could not open camera index {cameraIndex}.", "Error",
                 MessageBoxButton.OK, MessageBoxImage.Error);
             _capture.Dispose();
             _capture = null;

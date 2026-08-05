@@ -1,16 +1,144 @@
 <Application x:Class="VirtualMouse.UI.App"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
-    <!-- StartupUri is intentionally omitted. The main window is created and shown
-         via dependency injection in App.xaml.cs OnStartup(), which allows
-         MainWindow to receive its constructor dependencies from the DI container. -->
+    <!-- StartupUri intentionally omitted — window created via DI in App.xaml.cs -->
     <Application.Resources>
-        <!-- Dark theme base -->
-        <SolidColorBrush x:Key="BackgroundBrush" Color="#1E1E1E"/>
-        <SolidColorBrush x:Key="PanelBrush" Color="#2D2D2D"/>
-        <SolidColorBrush x:Key="AccentBrush" Color="#007ACC"/>
-        <SolidColorBrush x:Key="TextBrush" Color="#D4D4D4"/>
-        <SolidColorBrush x:Key="GreenBrush" Color="#4EC94E"/>
-        <SolidColorBrush x:Key="RedBrush" Color="#F44747"/>
+
+        <!-- ════════════════════════════════════════════════════════════════
+             BUTTON — full ControlTemplate at Application level.
+             Window.Resources styles do NOT reliably propagate through
+             Border/StackPanel in WPF. Application.Resources always wins.
+             ════════════════════════════════════════════════════════════════ -->
+        <Style TargetType="Button">
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Cursor"          Value="Hand"/>
+            <Setter Property="FontSize"        Value="12"/>
+            <Setter Property="HorizontalContentAlignment" Value="Center"/>
+            <Setter Property="VerticalContentAlignment"   Value="Center"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Root"
+                                Background="{TemplateBinding Background}"
+                                CornerRadius="3"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter
+                                HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
+                                TextBlock.Foreground="{TemplateBinding Foreground}"
+                                TextBlock.FontWeight="{TemplateBinding FontWeight}"
+                                TextBlock.FontSize="{TemplateBinding FontSize}"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Root" Property="Opacity" Value="0.82"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Root" Property="Opacity" Value="0.65"/>
+                            </Trigger>
+                            <!-- Disabled: dim only — no colour override -->
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="Root" Property="Opacity" Value="0.40"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- ════════════════════════════════════════════════════════════════
+             COMBOBOX — full ControlTemplate at Application level
+             ════════════════════════════════════════════════════════════════ -->
+        <ControlTemplate x:Key="DarkComboToggle" TargetType="ToggleButton">
+            <Border Background="#3C3C3C" BorderBrush="#666666"
+                    BorderThickness="1" CornerRadius="3">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition/>
+                        <ColumnDefinition Width="22"/>
+                    </Grid.ColumnDefinitions>
+                    <ContentPresenter Grid.Column="0" Margin="8,0,0,0"
+                                      VerticalAlignment="Center"
+                                      TextBlock.Foreground="#E0E0E0"/>
+                    <Path Grid.Column="1"
+                          Data="M 0 0 L 5 5 L 10 0 Z"
+                          Fill="#AAAAAA" Width="10" Height="5"
+                          HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                </Grid>
+            </Border>
+        </ControlTemplate>
+
+        <Style TargetType="ComboBox">
+            <Setter Property="Height"     Value="30"/>
+            <Setter Property="Foreground" Value="#E0E0E0"/>
+            <Setter Property="Background" Value="#3C3C3C"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ComboBox">
+                        <Grid>
+                            <ToggleButton
+                                Template="{StaticResource DarkComboToggle}"
+                                IsChecked="{Binding IsDropDownOpen, Mode=TwoWay,
+                                    RelativeSource={RelativeSource TemplatedParent}}"
+                                Focusable="False"/>
+                            <!-- Selected item text — always #E0E0E0 on #3C3C3C -->
+                            <TextBlock
+                                Margin="8,0,26,0"
+                                VerticalAlignment="Center"
+                                Foreground="#E0E0E0"
+                                Text="{Binding SelectionBoxItem,
+                                    RelativeSource={RelativeSource TemplatedParent}}"
+                                IsHitTestVisible="False"
+                                TextTrimming="CharacterEllipsis"/>
+                            <Popup IsOpen="{TemplateBinding IsDropDownOpen}"
+                                   AllowsTransparency="True" Focusable="False"
+                                   PopupAnimation="Slide" Placement="Bottom">
+                                <Border Background="#2E2E2E" BorderBrush="#666666"
+                                        BorderThickness="1"
+                                        MaxHeight="{TemplateBinding MaxDropDownHeight}">
+                                    <ScrollViewer>
+                                        <ItemsPresenter/>
+                                    </ScrollViewer>
+                                </Border>
+                            </Popup>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style TargetType="ComboBoxItem">
+            <Setter Property="Background" Value="#2E2E2E"/>
+            <Setter Property="Foreground" Value="#E0E0E0"/>
+            <Setter Property="Padding"    Value="8,5"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ComboBoxItem">
+                        <Border x:Name="Bd"
+                                Background="{TemplateBinding Background}"
+                                Padding="{TemplateBinding Padding}">
+                            <TextBlock Foreground="{TemplateBinding Foreground}"
+                                       Text="{TemplateBinding Content}"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsHighlighted" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="#1565C0"/>
+                                <Setter Property="Foreground" Value="White"/>
+                            </Trigger>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="#1A4A8A"/>
+                                <Setter Property="Foreground" Value="White"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- TextBlock default -->
+        <Style TargetType="TextBlock">
+            <Setter Property="Foreground" Value="#E0E0E0"/>
+        </Style>
+
     </Application.Resources>
 </Application>
