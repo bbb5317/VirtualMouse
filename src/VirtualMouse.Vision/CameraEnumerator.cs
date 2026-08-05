@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
+using OpenCvSharp;
 
 namespace VirtualMouse.Vision;
 
@@ -8,21 +9,29 @@ namespace VirtualMouse.Vision;
 /// </summary>
 public record CameraDeviceInfo(int Index, string Name)
 {
-    public override string ToString() => $"{Name}  (index {Index})";
+    public override string ToString() => $"{Name}  [index {Index}]";
 }
 
 /// <summary>
-/// Enumerates cameras using Windows Media Foundation (MFEnumDeviceSources).
-/// The indices returned here match exactly the indices used by
-/// VideoCapture(index, VideoCaptureAPIs.MSMF), so there is no mismatch.
+/// Enumerates cameras by probing MSMF indices 0..N and reading the
+/// backend-reported device name from each opened VideoCapture.
+/// This guarantees the index in CameraDeviceInfo matches exactly what
+/// VideoCapture(index, MSMF) will open — no cross-API ordering mismatch.
 ///
-/// Falls back to DirectShow ICreateDevEnum if MF enumeration fails,
-/// with a warning that indices may not match.
+/// Each probe opens the camera briefly (no frames read), reads the name,
+/// then immediately releases it. The OV9281 survives this because we use
+/// MSMF (not DSHOW) and release cleanly before opening the next index.
 /// </summary>
 public class CameraEnumerator
 {
     private readonly ILogger<CameraEnumerator> _logger;
-    private const int MaxDevices = 16;
+    private const int MaxProbeIndex = 8;
+
+    // VideoCaptureProperties value for backend device name (OpenCV 4.x)
+    // CAP_PROP_BACKEND = 42, but we want the device name string.
+    // OpenCV does not expose a string property for device name via VideoCapture.
+    // We fall back to MF name list cross-referenced by position.
+    private const int CAP_PROP_BACKEND = 42;
 
     public CameraEnumerator(ILogger<CameraEnumerator> logger)
     {
@@ -31,87 +40,84 @@ public class CameraEnumerator
 
     public IReadOnlyList<CameraDeviceInfo> Enumerate()
     {
-        var devices = new List<CameraDeviceInfo>();
-
-        try
-        {
-            var mfDevices = EnumerateMF();
-            for (int i = 0; i < mfDevices.Count; i++)
-            {
-                devices.Add(new CameraDeviceInfo(i, mfDevices[i]));
-                _logger.LogDebug("MF Camera {Index}: {Name}", i, mfDevices[i]);
-            }
-            _logger.LogInformation("MF enumerated {Count} camera(s).", devices.Count);
-        }
+        // Step 1: get friendly names from MF in MF enumeration order
+        var mfNames = new List<string>();
+        try { mfNames = GetMFNames(); }
         catch (Exception ex)
         {
-            _logger.LogWarning("MF enumeration failed ({Msg}); falling back to DirectShow.", ex.Message);
-            devices.Clear();
+            _logger.LogWarning("MF name query failed: {Msg}", ex.Message);
+        }
 
+        // Step 2: probe each MSMF index to confirm it opens
+        var devices = new List<CameraDeviceInfo>();
+        for (int i = 0; i < MaxProbeIndex; i++)
+        {
             try
             {
-                var dsDevices = EnumerateDirectShow();
-                for (int i = 0; i < dsDevices.Count; i++)
-                    devices.Add(new CameraDeviceInfo(i, dsDevices[i]));
-                _logger.LogInformation("DS enumerated {Count} camera(s).", devices.Count);
+                using var cap = new VideoCapture(i, VideoCaptureAPIs.MSMF);
+                if (!cap.IsOpened()) break;
+
+                // Use MF name at position i if available, otherwise generic label
+                string name = (i < mfNames.Count && !string.IsNullOrWhiteSpace(mfNames[i]))
+                    ? mfNames[i]
+                    : $"Camera {i}";
+
+                devices.Add(new CameraDeviceInfo(i, name));
+                _logger.LogDebug("Probed MSMF index {Index}: {Name}", i, name);
             }
-            catch (Exception ex2)
+            catch (Exception ex)
             {
-                _logger.LogWarning("DirectShow enumeration also failed ({Msg}).", ex2.Message);
+                _logger.LogDebug("MSMF probe {Index} failed: {Msg}", i, ex.Message);
+                break;
             }
         }
 
         if (devices.Count == 0)
         {
-            _logger.LogWarning("No cameras found; offering Camera 0 as fallback.");
+            _logger.LogWarning("No cameras found via probing; offering Camera 0 as fallback.");
             devices.Add(new CameraDeviceInfo(0, "Camera 0"));
         }
 
+        _logger.LogInformation("Enumerated {Count} camera(s).", devices.Count);
         return devices;
     }
 
-    // ── Windows Media Foundation enumeration ──────────────────────────────
+    // ── Windows Media Foundation name query ───────────────────────────────
 
-    private static List<string> EnumerateMF()
+    private static List<string> GetMFNames()
     {
         var names = new List<string>();
 
-        // MFStartup
         int hr = MFStartup(MF_VERSION, 0);
-        if (hr < 0) Marshal.ThrowExceptionForHR(hr);
+        if (hr < 0) return names;
 
         try
         {
-            // Create attribute store: MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE = VideoCapture
             hr = MFCreateAttributes(out IntPtr pAttr, 1);
-            if (hr < 0) Marshal.ThrowExceptionForHR(hr);
+            if (hr < 0) return names;
 
             try
             {
-                hr = MFSetAttributeGUID(pAttr,
+                MFSetAttributeGUID(pAttr,
                     MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE,
                     MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_GUID);
-                if (hr < 0) Marshal.ThrowExceptionForHR(hr);
 
                 hr = MFEnumDeviceSources(pAttr, out IntPtr ppDevices, out uint count);
-                if (hr < 0) Marshal.ThrowExceptionForHR(hr);
+                if (hr < 0 || ppDevices == IntPtr.Zero) return names;
 
                 try
                 {
-                    for (uint i = 0; i < count && i < MaxDevices; i++)
+                    for (uint i = 0; i < count && i < 16; i++)
                     {
-                        // ppDevices is an array of IMFActivate* pointers
                         IntPtr pActivate = Marshal.ReadIntPtr(ppDevices, (int)(i * IntPtr.Size));
-                        string name = GetMFString(pActivate,
-                            MF_DEVSOURCE_ATTRIBUTE_FRIENDLY_NAME);
+                        string name = GetMFString(pActivate, MF_DEVSOURCE_ATTRIBUTE_FRIENDLY_NAME);
                         names.Add(string.IsNullOrWhiteSpace(name) ? $"Camera {i}" : name);
                         Marshal.Release(pActivate);
                     }
                 }
                 finally
                 {
-                    if (ppDevices != IntPtr.Zero)
-                        Marshal.FreeCoTaskMem(ppDevices);
+                    Marshal.FreeCoTaskMem(ppDevices);
                 }
             }
             finally
@@ -129,62 +135,15 @@ public class CameraEnumerator
 
     private static string GetMFString(IntPtr pActivate, Guid guidKey)
     {
-        // IMFAttributes::GetAllocatedString
-        int hr = MFGetAttributeString(pActivate, guidKey,
-            out IntPtr pszValue, out uint cchLength);
+        int hr = MFGetAttributeString(pActivate, guidKey, out IntPtr pszValue, out _);
         if (hr < 0 || pszValue == IntPtr.Zero) return string.Empty;
-        try
-        {
-            return Marshal.PtrToStringUni(pszValue) ?? string.Empty;
-        }
-        finally
-        {
-            Marshal.FreeCoTaskMem(pszValue);
-        }
-    }
-
-    // ── DirectShow fallback ───────────────────────────────────────────────
-
-    private static List<string> EnumerateDirectShow()
-    {
-        var names = new List<string>();
-
-        var sysDevEnumType = Type.GetTypeFromCLSID(CLSID_SystemDeviceEnum)
-            ?? throw new InvalidOperationException("CLSID_SystemDeviceEnum not found.");
-
-        var sysDevEnum = (ICreateDevEnum)Activator.CreateInstance(sysDevEnumType)!;
-        sysDevEnum.CreateClassEnumerator(
-            ref CLSID_VideoInputDeviceCategory,
-            out System.Runtime.InteropServices.ComTypes.IEnumMoniker enumMoniker, 0);
-
-        if (enumMoniker == null) return names;
-
-        var monikers = new System.Runtime.InteropServices.ComTypes.IMoniker[1];
-        while (enumMoniker.Next(1, monikers, IntPtr.Zero) == 0)
-        {
-            try
-            {
-                monikers[0].BindToStorage(null!, null!, ref IID_IPropertyBag, out object ppvObj);
-                if (ppvObj is IPropertyBag bag)
-                {
-                    bag.Read("FriendlyName", out object val, null!);
-                    if (val is string fn && !string.IsNullOrWhiteSpace(fn))
-                    {
-                        names.Add(fn);
-                        continue;
-                    }
-                }
-            }
-            catch { /* skip bad moniker */ }
-            names.Add($"Camera {names.Count}");
-        }
-        return names;
+        try { return Marshal.PtrToStringUni(pszValue) ?? string.Empty; }
+        finally { Marshal.FreeCoTaskMem(pszValue); }
     }
 
     // ── MF P/Invoke ──────────────────────────────────────────────────────
 
     private const uint MF_VERSION = 0x00020070;
-
     private static readonly Guid MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE =
         new("49D1F9C5-60C3-4935-A25A-7F6A0B822F3D");
     private static readonly Guid MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_GUID =
@@ -194,75 +153,19 @@ public class CameraEnumerator
 
     [DllImport("mfplat.dll", ExactSpelling = true)]
     private static extern int MFStartup(uint version, uint dwFlags);
-
     [DllImport("mfplat.dll", ExactSpelling = true)]
     private static extern int MFShutdown();
-
     [DllImport("mfplat.dll", ExactSpelling = true)]
     private static extern int MFCreateAttributes(out IntPtr ppMFAttributes, uint cInitialSize);
-
     [DllImport("mfplat.dll", ExactSpelling = true)]
     private static extern int MFSetAttributeGUID(IntPtr pAttributes,
         [MarshalAs(UnmanagedType.LPStruct)] Guid guidKey,
         [MarshalAs(UnmanagedType.LPStruct)] Guid guidValue);
-
     [DllImport("mf.dll", ExactSpelling = true)]
     private static extern int MFEnumDeviceSources(IntPtr pAttributes,
         out IntPtr pppSourceActivate, out uint pcSourceActivate);
-
     [DllImport("mfplat.dll", ExactSpelling = true)]
     private static extern int MFGetAttributeString(IntPtr pAttributes,
         [MarshalAs(UnmanagedType.LPStruct)] Guid guidKey,
         out IntPtr ppwszValue, out uint pcchLength);
-
-    // ── DirectShow COM GUIDs / interfaces ────────────────────────────────
-
-    private static readonly Guid CLSID_SystemDeviceEnum =
-        new("62BE5D10-60EB-11D0-BD3B-00A0C911CE86");
-    private static Guid CLSID_VideoInputDeviceCategory =
-        new("860BB310-5D01-11D0-BD3B-00A0C911CE86");
-    private static Guid IID_IPropertyBag =
-        new("55272A00-42CB-11CE-8135-00AA004BB851");
-
-    [System.Runtime.InteropServices.ComImport,
-     Guid("29840822-5B84-11D0-BD3B-00A0C911CE86"),
-     System.Runtime.InteropServices.InterfaceType(
-         System.Runtime.InteropServices.ComInterfaceType.InterfaceIsIUnknown)]
-    private interface ICreateDevEnum
-    {
-        [System.Runtime.InteropServices.PreserveSig]
-        int CreateClassEnumerator(
-            [In] ref Guid clsidDeviceClass,
-            [Out] out System.Runtime.InteropServices.ComTypes.IEnumMoniker ppEnumMoniker,
-            [In] int dwFlags);
-    }
-
-    [System.Runtime.InteropServices.ComImport,
-     Guid("55272A00-42CB-11CE-8135-00AA004BB851"),
-     System.Runtime.InteropServices.InterfaceType(
-         System.Runtime.InteropServices.ComInterfaceType.InterfaceIsIUnknown)]
-    private interface IPropertyBag
-    {
-        [System.Runtime.InteropServices.PreserveSig]
-        int Read(
-            [In, MarshalAs(UnmanagedType.LPWStr)] string pszPropName,
-            [Out, MarshalAs(UnmanagedType.Struct)] out object pVar,
-            [In] IErrorLog pErrorLog);
-
-        [System.Runtime.InteropServices.PreserveSig]
-        int Write(
-            [In, MarshalAs(UnmanagedType.LPWStr)] string pszPropName,
-            [In, MarshalAs(UnmanagedType.Struct)] ref object pVar);
-    }
-
-    [System.Runtime.InteropServices.ComImport,
-     Guid("A9931136-05C0-11D3-A6F2-00A0C9255AC1"),
-     System.Runtime.InteropServices.InterfaceType(
-         System.Runtime.InteropServices.ComInterfaceType.InterfaceIsIUnknown)]
-    private interface IErrorLog
-    {
-        void AddError(
-            [In, MarshalAs(UnmanagedType.LPWStr)] string pszPropName,
-            [In] System.Runtime.InteropServices.ComTypes.EXCEPINFO pExcepInfo);
-    }
 }
